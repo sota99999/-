@@ -75,6 +75,8 @@ def main(argv=None) -> int:
     p.add_argument("--ev-threshold", type=float, default=1.1, help="購入する単勝EVの閾値")
     p.add_argument("--topk", type=int, default=3, help="各レースで表示する上位頭数")
     p.add_argument("--min-runs", type=int, default=1, help="過去出走数の下限（新馬を除外）")
+    p.add_argument("--calibrate", default="none", choices=["none", "sigmoid", "isotonic"],
+                   help="確率較正の方法（既定none）。sigmoid=Platt, isotonic=単調回帰")
     p.add_argument("--save-model", help="学習後にモデルを保存するパス（例: model.pkl）")
     args = p.parse_args(argv)
 
@@ -97,21 +99,30 @@ def main(argv=None) -> int:
     if len(x_tr) == 0 or len(x_va) == 0 or y_tr.nunique() < 2:
         sys.exit("[NG] 学習・検証に十分なデータ/クラスがありません。")
 
-    model, model_name = mlcommon.make_model()
+    base_model, model_name = mlcommon.make_model()
+    if args.calibrate != "none":
+        # CalibratedClassifierCV が交差検証で較正器も学習する（学習データ内で完結）
+        from sklearn.calibration import CalibratedClassifierCV
+        model = CalibratedClassifierCV(base_model, method=args.calibrate, cv=3)
+        model_name = f"{model_name}+calib({args.calibrate})"
+    else:
+        model = base_model
     print(f"モデル: {model_name} / ターゲット: {args.target}")
     model.fit(x_tr, y_tr)
     proba = model.predict_proba(x_va)[:, 1]
 
     # ---- 評価指標 ----
-    from sklearn.metrics import log_loss, roc_auc_score
+    from sklearn.metrics import brier_score_loss, log_loss, roc_auc_score
     try:
         auc = roc_auc_score(y_va, proba)
     except ValueError:
         auc = float("nan")
     ll = log_loss(y_va, proba, labels=[0, 1])
+    brier = brier_score_loss(y_va, proba)
     print("\n=== 検証スコア ===")
     print(f"AUC      : {auc:.3f}")
     print(f"LogLoss  : {ll:.3f}")
+    print(f"Brier    : {brier:.4f}  （較正の良さ。小さいほど良い）")
 
     # ---- 単勝回収率バックテスト ----
     df_va = df[valid_mask].reset_index(drop=True)

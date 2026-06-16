@@ -28,8 +28,9 @@ netkeiba 等からスクレイピングしたデータを格納し、予想に�
 │   ├── crawler.py         # 未取得レースだけを巡回する差分クローラ
 │   ├── export_features.py # 学習用 特徴量CSVエクスポート
 │   ├── mlcommon.py        # 学習・予測の共通処理（特徴量整形/モデル保存読込）
-│   ├── train_predict.py   # 学習スクリプト（LightGBM/sklearn・モデル保存）
-│   ├── predict.py         # 保存モデルで出走前レースを予測
+│   ├── train_predict.py   # 学習スクリプト（LightGBM/sklearn・較正・モデル保存）
+│   ├── predict.py         # 保存モデルで出走前レースを予測（単勝）
+│   ├── bet_optimizer.py   # 馬連・ワイドの期待値最適化/バックテスト
 │   ├── requirements.txt   # スクレイピングの依存
 │   └── requirements-ml.txt# 学習・予測の依存
 └── README.md
@@ -182,7 +183,13 @@ python scripts/train_predict.py --csv train.csv --target target_show
 python scripts/train_predict.py --db keiba.db --ev-threshold 1.2 --topk 3
 # モデルを保存（予測で再利用）
 python scripts/train_predict.py --db keiba.db --save-model model.pkl
+# 確率較正（オッズと整合する確率に補正。Brierスコアで良し悪しを確認）
+python scripts/train_predict.py --db keiba.db --calibrate isotonic --save-model model.pkl
 ```
+
+検証スコアには **AUC・LogLoss** に加え **Brier スコア**（確率較正の良さ。小さいほど
+予測確率が実際の的中率に近い）を表示します。`--calibrate sigmoid|isotonic` を付けると
+学習データ内の交差検証で較正器も学習し、確率の偏りを補正します。
 
 - **EV(単勝) = P(1着) × 単勝オッズ**。1.0 を超えると理論上の期待値プラス。
 - 学習/検証は `race_date` による**時系列分割**（古い→学習・新しい→検証）で行い、
@@ -217,9 +224,32 @@ python scripts/predict.py --db keiba.db --model model.pkl --ev-threshold 1.2
 `predict.py` は各馬の的中確率 `p` と期待値 `ev = p × 単勝オッズ` を高い順に表示します。
 学習時は出走前レース（正解ラベルが無い）を自動で除外します。
 
+## 馬連・ワイドの期待値最適化
+
+`scripts/bet_optimizer.py` は、モデルの単勝確率を **Harville モデル**で組み合わせ確率
+（馬連・ワイド）に変換し、買い目を評価します。
+
+- **馬連(i,j)** = P(i,j が1・2着, 順不同) = `p_i·p_j/(1-p_i) + p_j·p_i/(1-p_j)`
+- **ワイド(i,j)** = P(i,j がともに3着以内)（Harville 近似）
+
+```bash
+# 過去レースで回収率をバックテスト（実際の払戻 payouts と突き合わせ）
+python scripts/bet_optimizer.py --db keiba.db --model model.pkl --backtest --bet quinella
+python scripts/bet_optimizer.py --db keiba.db --model model.pkl --backtest --bet wide --topn 2
+
+# 出走前レースの推奨買い目（確率順とフェアオッズ=1/確率）
+python scripts/bet_optimizer.py --db keiba.db --model model.pkl --predict --bet quinella --topn 3
+```
+
+- 単勝確率はレース内で**合計1に正規化**してから組み合わせ確率に変換します。
+- バックテストは `payouts` テーブルの実配当で**的中率・回収率**を算出します
+  （払戻は結果ページ取り込み `scraper.py` で登録されます）。
+- predict では **フェアオッズ(=1/確率)** を表示。実際の馬連/ワイドオッズがこれより
+  高ければ期待値プラスの目安になります。
+
 ## 今後の拡張アイデア
 
 - 調教（追い切り）データ、コーナー通過順位の構造化
 - オッズの時系列（前日→締切）テーブル
 - 騎手・血統の同条件成績を結合した特徴量
-- 確率較正（calibration）や馬連・ワイド等の組み合わせ買い目の最適化
+- 三連複・三連単への拡張や、資金配分（ケリー基準）の最適化

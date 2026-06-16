@@ -108,6 +108,19 @@ def load_model(path: str) -> dict:
 # -----------------------------------------------------------------------------
 # 結果未確定（出走前）レース
 # -----------------------------------------------------------------------------
+def normalize_by_race(df: pd.DataFrame, prob_col: str = "p",
+                      race_col: str = "race_id", out_col: str = "p_norm") -> pd.DataFrame:
+    """各レース内で勝率を合計1に正規化した列を付与して返す。
+
+    モデルの単勝確率は1頭ずつ独立に出るためレース内合計が1にならない。
+    Harville モデルや出馬間の比較では合計1の確率が前提になるので正規化する。
+    """
+    df = df.copy()
+    s = df.groupby(race_col)[prob_col].transform("sum")
+    df[out_col] = df[prob_col] / s.where(s > 0, other=1.0)
+    return df
+
+
 def upcoming_race_ids(db: str) -> list[str]:
     """結果が1頭も確定していない（finish_position が全 NULL）レースID一覧。"""
     conn = sqlite3.connect(db)
