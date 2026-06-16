@@ -100,14 +100,20 @@ def fetch_html(race_id: str) -> str:
 # パース補助
 # -----------------------------------------------------------------------------
 def _id_from_href(tag, kind: str) -> str | None:
-    """<a href="/horse/2020xxxxxx/"> から ID 部分を抜き出す。kind='horse'等。"""
+    """リンクから末尾のIDを抜き出す。kind='horse'/'jockey'/'trainer' 等。
+
+    netkeiba のリンクは /horse/2021105250/ のほか
+    /jockey/result/recent/05339/ のように中間語(result/recent)が入る形があるため、
+    末尾のパスセグメントを ID とみなす。
+    """
     if tag is None:
         return None
     a = tag.find("a", href=re.compile(rf"/{kind}/"))
     if not a:
         return None
-    m = re.search(rf"/{kind}/(\w+)", a["href"])
-    return m.group(1) if m else None
+    href = a["href"].split("?")[0].split("#")[0].rstrip("/")
+    seg = href.rsplit("/", 1)[-1]
+    return seg or None
 
 
 def _to_float(s: str):
@@ -148,8 +154,15 @@ def parse_race(html: str, race_id: str) -> dict:
     # ---- レース基本情報 ----
     race: dict = {"race_id": race_id, "venue_id": race_id[4:6]}
 
-    h1 = soup.select_one("dl.racedata h1, diary_snap_cut h1, h1")
+    h1 = soup.select_one("dl.racedata h1, .racedata h1, .data_intro h1, h1")
     race["race_name"] = h1.get_text(strip=True) if h1 else None
+    if not race["race_name"]:
+        # フォールバック: ページタイトル先頭をレース名とする
+        t = soup.select_one("title")
+        if t:
+            race["race_name"] = (t.get_text(strip=True)
+                                 .split("｜")[0].split("|")[0]
+                                 .split("結果")[0].strip() or None)
 
     # "ダ右1600m / 天候 : 晴 / ダート : 良 / 発走 : 15:40" のような行
     cond = soup.select_one("diary_snap_cut span, dl.racedata span, .racedata span")
