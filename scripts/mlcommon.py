@@ -19,7 +19,8 @@ import pandas as pd
 DROP_COLS = ["race_id", "horse_id", "horse_name", "race_date",
              "target_win", "target_show"]
 # カテゴリとして扱う列（one-hot 化）
-CATEGORICAL = ["venue_id", "surface", "prev_surface"]
+CATEGORICAL = ["venue_id", "surface", "prev_surface",
+               "track_condition", "direction", "weather"]
 
 
 # -----------------------------------------------------------------------------

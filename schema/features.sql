@@ -60,8 +60,11 @@ FROM base;
 
 -- -----------------------------------------------------------------------------
 -- v_features: 学習用 特徴量 + ターゲット
+--   per-horse の特徴量を CTE(base) で作り、最後にレース単位の「展開(ペース)」を
+--   付与する2段構成。集計系は当該レースを除く窓でリークを防ぐ。
 -- -----------------------------------------------------------------------------
 CREATE VIEW v_features AS
+WITH base AS (
 SELECT
     r.race_id,
     r.horse_id,
@@ -70,11 +73,21 @@ SELECT
     ra.venue_id,
     ra.surface,
     ra.distance,
+    ra.field_size,
+    -- ---- A: レース当日の条件（出走前に判明している情報） -------------------
+    ra.track_condition,                                    -- 馬場状態 良/稍重/重/不良
+    ra.direction,                                          -- 回り 右/左/直線
+    ra.weather,                                            -- 天候
     r.post_position,
     r.horse_number,
     r.weight_carried,
+    r.horse_weight,                                        -- 馬体重
+    r.weight_change,                                       -- 馬体重増減
     r.odds,
     r.popularity,
+    -- 内外位置（0=最内, 1=最外）。枠の有利不利の手掛かり
+    CASE WHEN ra.field_size > 0
+         THEN ROUND(1.0 * r.post_position / ra.field_size, 3) END AS draw_ratio,
 
     -- ---- 過去走の通算成績（当該レースを除く） -------------------------------
     COUNT(*)            OVER w_hist                         AS runs_prior,
@@ -87,9 +100,23 @@ SELECT
     MIN(r.last_3f)      OVER w_hist                         AS best_last3f_prior,
 
     -- ---- 過去走のスピード指数（当該レースを除く） --------------------------
-    ROUND(AVG(s.speed_index) OVER w_hist, 1)               AS avg_speed_prior,   -- 平均
-    MAX(s.speed_index)       OVER w_hist                   AS best_speed_prior,  -- 自己最高
-    LAG(s.speed_index)       OVER w_ord                    AS prev_speed,        -- 前走
+    ROUND(AVG(s.speed_index) OVER w_hist, 1)               AS avg_speed_prior,
+    MAX(s.speed_index)       OVER w_hist                   AS best_speed_prior,
+    LAG(s.speed_index)       OVER w_ord                    AS prev_speed,
+
+    -- ---- B: 脚質（過去の「最初のコーナー通過順 ÷ 頭数」平均, 0=前/1=後） ----
+    ROUND(AVG(
+        CASE WHEN r.passing IS NOT NULL AND r.passing <> '' AND ra.field_size > 0
+             THEN 1.0 * CAST(substr(r.passing, 1, instr(r.passing || '-', '-') - 1) AS REAL)
+                  / ra.field_size
+        END) OVER w_hist, 3)                               AS run_style_prior,
+
+    -- ---- B: 騎手の過去成績（騎手ごと・当該レースを除く） --------------------
+    COUNT(*) OVER w_jockey                                 AS jockey_rides_prior,
+    ROUND(1.0 * SUM(r.finish_position = 1)  OVER w_jockey
+              / COUNT(*) OVER w_jockey, 3)                 AS jockey_win_rate_prior,
+    ROUND(1.0 * SUM(r.finish_position <= 3) OVER w_jockey
+              / COUNT(*) OVER w_jockey, 3)                 AS jockey_show_rate_prior,
 
     -- ---- 同コース実績（同 競馬場×馬場種別、当該レースを除く） --------------
     COUNT(*) OVER w_course                                 AS course_runs_prior,
@@ -118,6 +145,16 @@ WINDOW
                ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING),
     -- 全行順序付け（LAG=前走参照用）
     w_ord  AS (PARTITION BY r.horse_id ORDER BY ra.race_date),
+    -- 騎手の過去走のみ（騎手ごと、現在行を除く）
+    w_jockey AS (PARTITION BY r.jockey_id ORDER BY ra.race_date
+                 ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING),
     -- 同コース過去走のみ（馬×競馬場×馬場種別、現在行を除く）
     w_course AS (PARTITION BY r.horse_id, ra.venue_id, ra.surface ORDER BY ra.race_date
-                 ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING);
+                 ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING)
+)
+SELECT
+    base.*,
+    -- ---- B: 展開（ペース）推定: 出走各馬の脚質の平均 -----------------------
+    --   低い=前へ行く馬が多い=ハイペース傾向, 高い=スローペース傾向
+    ROUND(AVG(run_style_prior) OVER (PARTITION BY race_id), 3) AS race_pace_estimate
+FROM base;
