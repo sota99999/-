@@ -1,0 +1,15 @@
+# SQLite データベース本体（生成物なのでコミットしない）
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+
+# スクレイピングした生データ
+data/raw/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
