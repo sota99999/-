@@ -137,11 +137,12 @@ base AS (
         -- 同コース実績（馬×競馬場×馬場種別、当該レースを除く）
         COUNT(*) OVER w_course                            AS course_runs_prior,
         ROUND(1.0 * SUM(finish_position <= 3) OVER w_course / COUNT(*) OVER w_course, 3) AS course_show_rate_prior,
-        -- 前走情報
+        -- 前走情報・ローテーション
         LAG(finish_position) OVER w_ord                   AS prev_finish,
         LAG(popularity)      OVER w_ord                   AS prev_popularity,
         LAG(surface)         OVER w_ord                   AS prev_surface,
         LAG(distance)        OVER w_ord                   AS prev_distance,
+        LAG(class_level)     OVER w_ord                   AS prev_class_level,   -- 前走クラス格
         CAST(julianday(race_date) - julianday(LAG(race_date) OVER w_ord) AS INTEGER) AS days_since_last,
         distance - LAG(distance) OVER w_ord               AS distance_change,
         -- ターゲット（正解ラベル）
@@ -156,6 +157,14 @@ base AS (
                      ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING),
         w_course AS (PARTITION BY horse_id, venue_id, surface ORDER BY race_date
                      ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING)
+),
+rot AS (
+    -- ローテ: 休み明け(70日超 or 初出走)で区切り番号を増やし「叩き何戦目」を数える
+    SELECT base.*,
+        SUM(CASE WHEN days_since_last IS NULL OR days_since_last > 70 THEN 1 ELSE 0 END)
+            OVER (PARTITION BY horse_id ORDER BY race_date
+                  ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS layoff_group
+    FROM base
 )
 -- 最終出力: 当該レースの結果列（finish_position/speed_index/last_3f/passing 等）は出さない
 SELECT
@@ -172,7 +181,14 @@ SELECT
     jockey_rides_prior, jockey_win_rate_prior, jockey_show_rate_prior,
     course_runs_prior, course_show_rate_prior,
     prev_finish, prev_popularity, prev_surface, prev_distance, days_since_last, distance_change,
+    -- ---- ローテーション（再収集不要・既存データから導出） ------------------
+    prev_class_level,                                     -- 前走のクラス格
+    class_level - prev_class_level                        AS class_change,        -- 正=昇級, 負=降級
+    CASE WHEN days_since_last IS NULL OR days_since_last > 70 THEN 1 ELSE 0 END AS is_layoff,       -- 休み明け
+    CASE WHEN days_since_last <= 8 THEN 1 ELSE 0 END      AS is_back_to_back,     -- 連闘
+    CASE WHEN prev_surface IS NOT NULL AND prev_surface <> surface THEN 1 ELSE 0 END AS surface_change, -- 芝⇄ダ替わり
+    ROW_NUMBER() OVER (PARTITION BY horse_id, layoff_group ORDER BY race_date)  AS races_since_layoff, -- 叩き何戦目
     -- 展開（ペース）推定: 出走各馬の脚質の平均（低い=前残り少なめ=ハイペース傾向）
     ROUND(AVG(run_style_prior) OVER (PARTITION BY race_id), 3) AS race_pace_estimate,
     target_win, target_show
-FROM base;
+FROM rot;
