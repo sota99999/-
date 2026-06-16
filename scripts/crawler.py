@@ -26,9 +26,7 @@ import sqlite3
 import sys
 import time
 
-import requests
-
-import scraper  # 同ディレクトリ。fetch/parse/upsert を再利用
+import scraper  # 同ディレクトリ。HTTP取得/parse/upsert を再利用
 
 # 開催日の全レースへのリンクを含む一覧ページ（kaisai_date=YYYYMMDD）
 RACE_LIST_URL = "https://race.netkeiba.com/top/race_list_sub.html?kaisai_date={ymd}"
@@ -40,13 +38,10 @@ RACE_LIST_URL = "https://race.netkeiba.com/top/race_list_sub.html?kaisai_date={y
 def fetch_race_ids_for_date(date: dt.date) -> list[str]:
     """指定日の開催レースID（12桁）を一覧ページから抽出して返す。"""
     ymd = date.strftime("%Y%m%d")
-    url = RACE_LIST_URL.format(ymd=ymd)
-    resp = requests.get(url, headers=scraper.HEADERS, timeout=30)
-    resp.raise_for_status()
-    resp.encoding = resp.apparent_encoding or "utf-8"
+    html = scraper.http_get(RACE_LIST_URL.format(ymd=ymd))  # リトライ付き取得
     # href の race_id=2024... もしくは /race/2024.../ の双方に対応
-    ids = re.findall(r"race_id=(\d{12})", resp.text)
-    ids += re.findall(r"/race/(\d{12})", resp.text)
+    ids = re.findall(r"race_id=(\d{12})", html)
+    ids += re.findall(r"/race/(\d{12})", html)
     # 重複排除（出現順を維持）
     return list(dict.fromkeys(ids))
 
@@ -104,17 +99,20 @@ def main(argv=None) -> int:
     conn = sqlite3.connect(args.db)
     conn.execute("PRAGMA foreign_keys = ON")
 
-    total_new = 0
-    for day in days:
+    total_new = total_ng = 0
+    for di, day in enumerate(days, 1):
+        prefix = f"[{di}/{len(days)}] {day}"
         try:
             all_ids = fetch_race_ids_for_date(day)
         except Exception as e:  # noqa: BLE001
-            print(f"[NG] {day} 一覧取得失敗: {e}", file=sys.stderr)
+            print(f"[NG] {prefix} 一覧取得失敗: {e}", file=sys.stderr)
             time.sleep(scraper.REQUEST_INTERVAL)
             continue
 
         new_ids = filter_new(conn, all_ids)
-        print(f"== {day}: 開催{len(all_ids)}R / 未取得{len(new_ids)}R")
+        # 中断後の再実行では取得済みは自動スキップされる（差分クロール）
+        print(f"== {prefix}: 開催{len(all_ids)}R / 未取得{len(new_ids)}R "
+              f"（累計 取込{total_new} 失敗{total_ng}）")
 
         if args.dry_run:
             for rid in new_ids:
@@ -129,6 +127,7 @@ def main(argv=None) -> int:
                 print(f"   [OK] {rid}: {parsed['race'].get('race_name')} "
                       f"({len(parsed['results'])}頭)")
             except Exception as e:  # noqa: BLE001
+                total_ng += 1
                 print(f"   [NG] {rid}: {e}", file=sys.stderr)
             time.sleep(scraper.REQUEST_INTERVAL)
 
@@ -136,7 +135,8 @@ def main(argv=None) -> int:
 
     conn.close()
     if not args.dry_run:
-        print(f"\n完了: 新規 {total_new}R を取り込みました。")
+        print(f"\n完了: 新規 {total_new}R 取込 / {total_ng}R 失敗。"
+              "（失敗分は再実行すれば未取得として再取得を試みます）")
     return 0
 
 

@@ -34,11 +34,52 @@ BASE_URL = "https://db.netkeiba.com/race/{race_id}/"
 SHUTUBA_URL = "https://race.netkeiba.com/race/shutuba.html?race_id={race_id}"  # 出馬表
 ENCODING = "euc-jp"               # db.netkeiba.com は EUC-JP
 REQUEST_INTERVAL = 1.5            # リクエスト間隔(秒)。マナーとして必須
+MAX_RETRIES = 4                   # ネットワーク/一時エラー時の最大リトライ回数
+# ブラウザ相当の UA。素っ気ない UA だと弾かれやすいため。
 HEADERS = {
-    "User-Agent": "Mozilla/5.0 (compatible; keiba-db/1.0; personal research)"
+    "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                   "(KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"),
+    "Accept-Language": "ja,en-US;q=0.9,en;q=0.8",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
 }
 
+# リトライ対象の一時的ステータス（恒久エラーの 403/404 は即時あきらめる）
+RETRY_STATUS = {429, 500, 502, 503, 504}
+
 ROOT = Path(__file__).resolve().parent.parent
+
+
+# -----------------------------------------------------------------------------
+# HTTP 取得（リトライ + 指数バックオフ + ジッタ）
+# -----------------------------------------------------------------------------
+def http_get(url: str, encoding: str | None = None, max_retries: int = MAX_RETRIES) -> str:
+    """URL を取得して本文(str)を返す。一時エラーは指数バックオフで再試行する。
+
+    - タイムアウト/接続エラーや 429,5xx はリトライ（2,4,8,16秒 + ジッタ）。
+    - 403/404 等の恒久エラーは即座に例外送出（リトライしても無駄なため）。
+    """
+    import random
+    last_err: Exception | None = None
+    for attempt in range(max_retries + 1):
+        try:
+            resp = requests.get(url, headers=HEADERS, timeout=30)
+            if resp.status_code in RETRY_STATUS:
+                raise requests.HTTPError(f"{resp.status_code} (一時エラー)", response=resp)
+            resp.raise_for_status()
+            resp.encoding = encoding or resp.apparent_encoding or "utf-8"
+            return resp.text
+        except requests.RequestException as e:
+            # 恒久エラー（403/404 等）はリトライせず即送出
+            status = getattr(getattr(e, "response", None), "status_code", None)
+            if status is not None and status not in RETRY_STATUS:
+                raise
+            last_err = e
+            if attempt < max_retries:
+                wait = 2 ** (attempt + 1) + random.uniform(0, 1.0)
+                print(f"   ...retry {attempt + 1}/{max_retries} after {wait:.1f}s ({e})",
+                      file=sys.stderr)
+                time.sleep(wait)
+    raise last_err if last_err else RuntimeError("http_get failed")
 
 # 競馬場名 → 場コード（race_id 由来の場コードと突き合わせる用の逆引き）
 VENUE_NAME_TO_ID = {
@@ -51,12 +92,8 @@ VENUE_NAME_TO_ID = {
 # 取得
 # -----------------------------------------------------------------------------
 def fetch_html(race_id: str) -> str:
-    """レース結果ページの HTML を取得して返す。"""
-    url = BASE_URL.format(race_id=race_id)
-    resp = requests.get(url, headers=HEADERS, timeout=30)
-    resp.raise_for_status()
-    resp.encoding = ENCODING
-    return resp.text
+    """レース結果ページの HTML を取得して返す（EUC-JP）。"""
+    return http_get(BASE_URL.format(race_id=race_id), encoding=ENCODING)
 
 
 # -----------------------------------------------------------------------------
@@ -452,10 +489,8 @@ def ingest_race(conn: sqlite3.Connection, race_id: str) -> dict:
 
 def ingest_shutuba(conn: sqlite3.Connection, race_id: str) -> dict:
     """出馬表（出走前）を取得・パースして DB へ投入する。finish は NULL。"""
-    resp = requests.get(SHUTUBA_URL.format(race_id=race_id), headers=HEADERS, timeout=30)
-    resp.raise_for_status()
-    resp.encoding = resp.apparent_encoding or "utf-8"
-    parsed = parse_shutuba(resp.text, race_id)
+    html = http_get(SHUTUBA_URL.format(race_id=race_id))
+    parsed = parse_shutuba(html, race_id)
     upsert_race(conn, parsed)
     return parsed
 
