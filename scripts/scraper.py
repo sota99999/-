@@ -496,6 +496,25 @@ def ingest_shutuba(conn: sqlite3.Connection, race_id: str) -> dict:
 
 
 # -----------------------------------------------------------------------------
+# スキーマ自動初期化
+# -----------------------------------------------------------------------------
+def ensure_schema(conn: sqlite3.Connection) -> None:
+    """races テーブルが無ければ schema.sql / seed_venues.sql を適用して初期化する。
+
+    初回実行時に「no such table: races」で落ちないよう、取り込み前に必ず呼ぶ。
+    既に初期化済みなら何もしない（冪等）。
+    """
+    exists = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='races'"
+    ).fetchone()
+    if exists:
+        return
+    for fname in ("schema/schema.sql", "schema/seed_venues.sql"):
+        conn.executescript((ROOT / fname).read_text(encoding="utf-8"))
+    conn.commit()
+
+
+# -----------------------------------------------------------------------------
 # CLI
 # -----------------------------------------------------------------------------
 def main(argv=None) -> int:
@@ -508,6 +527,7 @@ def main(argv=None) -> int:
 
     conn = sqlite3.connect(args.db)
     conn.execute("PRAGMA foreign_keys = ON")
+    ensure_schema(conn)   # 初回実行時に DB を自動初期化
     ingest = ingest_shutuba if args.shutuba else ingest_race
 
     for i, race_id in enumerate(args.race_ids):

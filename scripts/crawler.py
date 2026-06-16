@@ -98,6 +98,7 @@ def main(argv=None) -> int:
 
     conn = sqlite3.connect(args.db)
     conn.execute("PRAGMA foreign_keys = ON")
+    scraper.ensure_schema(conn)   # 初回実行時に DB を自動初期化
 
     total_new = total_ng = 0
     for di, day in enumerate(days, 1):
