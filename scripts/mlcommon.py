@@ -121,6 +121,20 @@ def normalize_by_race(df: pd.DataFrame, prob_col: str = "p",
     return df
 
 
+def kelly_fraction(p: float, odds: float) -> float:
+    """単勝のケリー基準による最適賭け率（資金に対する割合）を返す。
+
+    odds は単勝オッズ（払戻倍率, 例 3.0 なら的中で元本含め3倍）。
+    純オッズ b = odds - 1 として f* = (p*odds - 1) / b。
+    期待値マイナス（p*odds <= 1）や不正な値は 0 にクリップする。
+    """
+    if not (odds and odds > 1) or p is None or not (0 <= p <= 1):
+        return 0.0
+    b = odds - 1.0
+    f = (p * odds - 1.0) / b
+    return max(0.0, min(1.0, f))
+
+
 def upcoming_race_ids(db: str) -> list[str]:
     """結果が1頭も確定していない（finish_position が全 NULL）レースID一覧。"""
     conn = sqlite3.connect(db)

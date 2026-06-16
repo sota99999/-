@@ -37,6 +37,10 @@ def main(argv=None) -> int:
     p.add_argument("--ev-threshold", type=float, default=None,
                    help="指定すると EV がこの値以上の馬（買い目候補）だけ表示")
     p.add_argument("--topk", type=int, default=5, help="各レースで表示する上位頭数")
+    p.add_argument("--bankroll", type=float, default=None,
+                   help="資金額。指定するとケリー基準の推奨賭け金 stake を表示")
+    p.add_argument("--kelly-fraction", type=float, default=0.5,
+                   help="ケリー比率の係数（既定0.5=ハーフケリー。分散を抑える）")
     args = p.parse_args(argv)
 
     bundle = mlcommon.load_model(args.model)
@@ -64,10 +68,18 @@ def main(argv=None) -> int:
     # 学習時と同じ特徴量列に揃えて予測
     x = mlcommon.build_features(df, feature_columns=bundle["feature_columns"])
     df = df.assign(p=model.predict_proba(x)[:, 1])
-    df["ev"] = df["p"] * pd.to_numeric(df["odds"], errors="coerce")
+    odds = pd.to_numeric(df["odds"], errors="coerce")
+    df["ev"] = df["p"] * odds
 
-    cols = [c for c in ["horse_number", "horse_name", "odds", "popularity", "p", "ev"]
-            if c in df.columns]
+    # ケリー基準の推奨賭け金（資金額が指定された場合）
+    if args.bankroll is not None:
+        kelly = df.apply(lambda r: mlcommon.kelly_fraction(r["p"], r["odds"]), axis=1)
+        df["stake"] = (kelly * args.kelly_fraction * args.bankroll).round(-1)  # 10円単位
+
+    base_cols = ["horse_number", "horse_name", "odds", "popularity", "p", "ev"]
+    if args.bankroll is not None:
+        base_cols.append("stake")
+    cols = [c for c in base_cols if c in df.columns]
     for rid, g in df.groupby("race_id"):
         g = g.sort_values("p", ascending=False)
         if args.ev_threshold is not None:
@@ -80,6 +92,9 @@ def main(argv=None) -> int:
         out = g[cols].assign(p=g["p"].round(3), ev=g["ev"].round(2))
         print(out.to_string(index=False))
 
+    if args.bankroll is not None:
+        print(f"\nstake = ケリー基準×{args.kelly_fraction}×資金{args.bankroll:.0f}円"
+              "（EVプラスの馬のみ正、10円単位）")
     print("\n※ EV>1.0 は理論上の期待値プラス。馬券は自己責任で。")
     return 0
 

@@ -29,8 +29,8 @@ netkeiba 等からスクレイピングしたデータを格納し、予想に�
 │   ├── export_features.py # 学習用 特徴量CSVエクスポート
 │   ├── mlcommon.py        # 学習・予測の共通処理（特徴量整形/モデル保存読込）
 │   ├── train_predict.py   # 学習スクリプト（LightGBM/sklearn・較正・モデル保存）
-│   ├── predict.py         # 保存モデルで出走前レースを予測（単勝）
-│   ├── bet_optimizer.py   # 馬連・ワイドの期待値最適化/バックテスト
+│   ├── predict.py         # 保存モデルで出走前レースを予測（単勝・ケリー資金配分）
+│   ├── bet_optimizer.py   # 馬連/ワイド/三連複/三連単の期待値最適化/バックテスト
 │   ├── requirements.txt   # スクレイピングの依存
 │   └── requirements-ml.txt# 学習・予測の依存
 └── README.md
@@ -224,21 +224,40 @@ python scripts/predict.py --db keiba.db --model model.pkl --ev-threshold 1.2
 `predict.py` は各馬の的中確率 `p` と期待値 `ev = p × 単勝オッズ` を高い順に表示します。
 学習時は出走前レース（正解ラベルが無い）を自動で除外します。
 
-## 馬連・ワイドの期待値最適化
+### ケリー基準による資金配分
 
-`scripts/bet_optimizer.py` は、モデルの単勝確率を **Harville モデル**で組み合わせ確率
-（馬連・ワイド）に変換し、買い目を評価します。
+`--bankroll` を指定すると、各馬の推奨賭け金 `stake` をケリー基準で算出します。
 
-- **馬連(i,j)** = P(i,j が1・2着, 順不同) = `p_i·p_j/(1-p_i) + p_j·p_i/(1-p_j)`
-- **ワイド(i,j)** = P(i,j がともに3着以内)（Harville 近似）
+```bash
+# 資金1万円・ハーフケリー(既定)で推奨賭け金を表示
+python scripts/predict.py --db keiba.db --model model.pkl --bankroll 10000
+# フルケリー（分散大）にする場合
+python scripts/predict.py --db keiba.db --model model.pkl --bankroll 10000 --kelly-fraction 1.0
+```
+
+- ケリー比率 `f* = (p×オッズ − 1) / (オッズ − 1)`。期待値マイナスの馬は 0（賭けない）。
+- 既定は**ハーフケリー**（`--kelly-fraction 0.5`）。フルケリーは理論上の成長率は最大
+  ですが分散が大きいため、実務では 1/2〜1/4 が無難です。
+
+## 連勝式馬券の期待値最適化（馬連/ワイド/三連複/三連単）
+
+`scripts/bet_optimizer.py` は、モデルの単勝確率を **Harville モデル**で組み合わせ確率に
+変換し、買い目を評価します。
+
+- **馬連(i,j)** = P(i,j が1・2着, 順不同)
+- **ワイド(i,j)** = P(i,j がともに3着以内)
+- **三連複(i,j,k)** = P(i,j,k が上位3着, 順不同)
+- **三連単(i,j,k)** = P(i,j,k がこの着順) = `p_i · p_j/(1-p_i) · p_k/(1-p_i-p_j)`
+
+`--bet` に `quinella`(馬連) / `wide`(ワイド) / `trio`(三連複) / `trifecta`(三連単) を指定します。
 
 ```bash
 # 過去レースで回収率をバックテスト（実際の払戻 payouts と突き合わせ）
 python scripts/bet_optimizer.py --db keiba.db --model model.pkl --backtest --bet quinella
-python scripts/bet_optimizer.py --db keiba.db --model model.pkl --backtest --bet wide --topn 2
+python scripts/bet_optimizer.py --db keiba.db --model model.pkl --backtest --bet trio --topn 2
 
 # 出走前レースの推奨買い目（確率順とフェアオッズ=1/確率）
-python scripts/bet_optimizer.py --db keiba.db --model model.pkl --predict --bet quinella --topn 3
+python scripts/bet_optimizer.py --db keiba.db --model model.pkl --predict --bet trifecta --topn 5
 ```
 
 - 単勝確率はレース内で**合計1に正規化**してから組み合わせ確率に変換します。
@@ -252,4 +271,4 @@ python scripts/bet_optimizer.py --db keiba.db --model model.pkl --predict --bet 
 - 調教（追い切り）データ、コーナー通過順位の構造化
 - オッズの時系列（前日→締切）テーブル
 - 騎手・血統の同条件成績を結合した特徴量
-- 三連複・三連単への拡張や、資金配分（ケリー基準）の最適化
+- 連勝式の実オッズ取得による事前EV算出、複数券種のポートフォリオ最適化
