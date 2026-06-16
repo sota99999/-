@@ -31,6 +31,7 @@ import requests
 from bs4 import BeautifulSoup
 
 BASE_URL = "https://db.netkeiba.com/race/{race_id}/"
+SHUTUBA_URL = "https://race.netkeiba.com/race/shutuba.html?race_id={race_id}"  # 出馬表
 ENCODING = "euc-jp"               # db.netkeiba.com は EUC-JP
 REQUEST_INTERVAL = 1.5            # リクエスト間隔(秒)。マナーとして必須
 HEADERS = {
@@ -319,12 +320,142 @@ def upsert_race(conn: sqlite3.Connection, parsed: dict) -> None:
 
 
 # -----------------------------------------------------------------------------
+# 出馬表（出走前）のパース
+#   結果がまだ無いレースを、results に finish_position=NULL で登録するための
+#   情報を抽出する。レース条件・出走馬・朝のオッズ/人気を取得。
+# -----------------------------------------------------------------------------
+def _header_index(header_cells: list[str]):
+    """ヘッダ文字列 → 列インデックス。部分一致で柔軟に解決する。"""
+    def find(*keys):
+        for i, h in enumerate(header_cells):
+            if any(k in h for k in keys):
+                return i
+        return None
+    return {
+        "枠": find("枠"),
+        "馬番": find("馬番"),
+        "馬名": find("馬名"),
+        "性齢": find("性齢"),
+        "斤量": find("斤量"),
+        "騎手": find("騎手"),
+        "厩舎": find("厩舎", "調教師"),
+        "馬体重": find("馬体重"),
+        "オッズ": find("オッズ", "単勝"),
+        "人気": find("人気"),
+    }
+
+
+def parse_shutuba(html: str, race_id: str) -> dict:
+    """出馬表ページから race（結果未確定）と出走馬を抽出する。"""
+    soup = BeautifulSoup(html, "lxml")
+    race: dict = {"race_id": race_id, "venue_id": race_id[4:6],
+                  "race_number": _to_int(race_id[-2:])}
+
+    name_el = soup.select_one(".RaceName, .RaceList_Item02 .RaceName, h1")
+    race["race_name"] = name_el.get_text(strip=True) if name_el else None
+
+    cond = soup.select_one(".RaceData01")
+    cond_text = cond.get_text(" ", strip=True) if cond else ""
+    if "芝" in cond_text:
+        race["surface"] = "芝"
+    elif "ダ" in cond_text:
+        race["surface"] = "ダート"
+    elif "障" in cond_text:
+        race["surface"] = "障害"
+    m = re.search(r"(\d{3,4})m", cond_text)
+    race["distance"] = _to_int(m.group(1)) if m else None
+    if "右" in cond_text:
+        race["direction"] = "右"
+    elif "左" in cond_text:
+        race["direction"] = "左"
+    elif "直" in cond_text:
+        race["direction"] = "直線"
+    m = re.search(r"天候\s*:\s*(\S+)", cond_text)
+    race["weather"] = m.group(1) if m else None
+    m = re.search(r"馬場\s*:\s*(良|稍重|重|不良)", cond_text)
+    race["track_condition"] = m.group(1) if m else None
+
+    # 開催日は kaisai_date=YYYYMMDD から取得（NOT NULL のため必須）
+    m = re.search(r"kaisai_date=(\d{8})", html)
+    if m:
+        d = m.group(1)
+        race["race_date"] = f"{d[:4]}-{d[4:6]}-{d[6:8]}"
+    else:
+        race["race_date"] = None
+
+    m = re.search(r"(G[ⅠⅡⅢ123])", (race.get("race_name") or "") + " " + cond_text)
+    race["grade"] = m.group(1) if m else None
+
+    # ---- 出走馬テーブル ----
+    table = soup.select_one("table.Shutuba_Table, table.ShutubaTable, table.RaceTable01")
+    results = []
+    if table:
+        rows_tr = table.select("tr")
+        header_cells = [c.get_text(strip=True) for c in rows_tr[0].find_all(["th", "td"])]
+        idx = _header_index(header_cells)
+
+        def cell(cells, key):
+            i = idx.get(key)
+            return cells[i] if i is not None and i < len(cells) else None
+
+        for tr in rows_tr[1:]:
+            cells = tr.find_all("td")
+            if not cells:
+                continue
+            row = {"race_id": race_id, "finish_position": None, "finish_status": None}
+            row["post_position"] = _to_int((cell(cells, "枠") or _blank()).get_text(strip=True))
+            row["horse_number"] = _to_int((cell(cells, "馬番") or _blank()).get_text(strip=True))
+            if row["horse_number"] is None:
+                continue  # 馬番が取れない行はスキップ
+
+            hc = cell(cells, "馬名")
+            row["horse_id"] = _id_from_href(hc, "horse")
+            row["horse_name"] = hc.get_text(strip=True) if hc else None
+            sexage = (cell(cells, "性齢") or _blank()).get_text(strip=True)
+            row["sex"] = sexage[0] if sexage else None
+            jc = cell(cells, "騎手")
+            row["jockey_id"] = _id_from_href(jc, "jockey")
+            row["jockey_name"] = jc.get_text(strip=True) if jc else None
+            tc = cell(cells, "厩舎")
+            row["trainer_id"] = _id_from_href(tc, "trainer")
+            row["trainer_name"] = tc.get_text(strip=True) if tc else None
+            row["weight_carried"] = _to_float((cell(cells, "斤量") or _blank()).get_text(strip=True))
+            row["odds"] = _to_float((cell(cells, "オッズ") or _blank()).get_text(strip=True))
+            row["popularity"] = _to_int((cell(cells, "人気") or _blank()).get_text(strip=True))
+
+            bw = (cell(cells, "馬体重") or _blank()).get_text(strip=True)
+            mbw = re.match(r"(\d+)\(([-+]?\d+)\)", bw)
+            if mbw:
+                row["horse_weight"] = _to_int(mbw.group(1))
+                row["weight_change"] = _to_int(mbw.group(2))
+            else:
+                row["horse_weight"] = _to_int(bw) if bw.isdigit() else None
+                row["weight_change"] = None
+            # 出走前なので走破系は無し
+            row.update({"time_seconds": None, "margin": None, "passing": None, "last_3f": None})
+            results.append(row)
+
+    race["field_size"] = len(results) or None
+    return {"race": race, "results": results, "payouts": []}
+
+
+# -----------------------------------------------------------------------------
 # 1レース取り込み（取得→パース→投入をまとめたヘルパ）
 # -----------------------------------------------------------------------------
 def ingest_race(conn: sqlite3.Connection, race_id: str) -> dict:
-    """race_id を取得・パースして DB へ投入し、parse 結果を返す。"""
+    """確定済みレースを取得・パースして DB へ投入し、parse 結果を返す。"""
     html = fetch_html(race_id)
     parsed = parse_race(html, race_id)
+    upsert_race(conn, parsed)
+    return parsed
+
+
+def ingest_shutuba(conn: sqlite3.Connection, race_id: str) -> dict:
+    """出馬表（出走前）を取得・パースして DB へ投入する。finish は NULL。"""
+    resp = requests.get(SHUTUBA_URL.format(race_id=race_id), headers=HEADERS, timeout=30)
+    resp.raise_for_status()
+    resp.encoding = resp.apparent_encoding or "utf-8"
+    parsed = parse_shutuba(resp.text, race_id)
     upsert_race(conn, parsed)
     return parsed
 
@@ -333,19 +464,23 @@ def ingest_race(conn: sqlite3.Connection, race_id: str) -> dict:
 # CLI
 # -----------------------------------------------------------------------------
 def main(argv=None) -> int:
-    parser = argparse.ArgumentParser(description="netkeiba レース結果スクレイパー")
+    parser = argparse.ArgumentParser(description="netkeiba レース結果/出馬表スクレイパー")
     parser.add_argument("race_ids", nargs="+", help="取り込むレースID（12桁）")
     parser.add_argument("--db", default="keiba.db", help="SQLite DBファイル (default: keiba.db)")
+    parser.add_argument("--shutuba", action="store_true",
+                        help="確定結果でなく出馬表（出走前）を取り込む（finish=NULL）")
     args = parser.parse_args(argv)
 
     conn = sqlite3.connect(args.db)
     conn.execute("PRAGMA foreign_keys = ON")
+    ingest = ingest_shutuba if args.shutuba else ingest_race
 
     for i, race_id in enumerate(args.race_ids):
         try:
-            parsed = ingest_race(conn, race_id)
+            parsed = ingest(conn, race_id)
             n = len(parsed["results"])
-            print(f"[OK] {race_id}: {parsed['race'].get('race_name')} ({n}頭) を取り込み")
+            kind = "出馬表" if args.shutuba else "結果"
+            print(f"[OK] {race_id}: {parsed['race'].get('race_name')} ({n}頭, {kind}) を取り込み")
         except Exception as e:  # noqa: BLE001  個別レースの失敗で全体を止めない
             print(f"[NG] {race_id}: {e}", file=sys.stderr)
         if i < len(args.race_ids) - 1:

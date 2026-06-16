@@ -8,6 +8,12 @@
 # スクレイピングした生データ
 data/raw/
 
+# 学習済みモデル・エクスポートCSV（生成物）
+*.pkl
+*.joblib
+features.csv
+train.csv
+
 # Python
 __pycache__/
 *.pyc

@@ -27,7 +27,9 @@ netkeiba 等からスクレイピングしたデータを格納し、予想に�
 │   ├── scraper.py         # netkeiba 単一レース取り込み
 │   ├── crawler.py         # 未取得レースだけを巡回する差分クローラ
 │   ├── export_features.py # 学習用 特徴量CSVエクスポート
-│   ├── train_predict.py   # 学習・予測サンプル（LightGBM/sklearn）
+│   ├── mlcommon.py        # 学習・予測の共通処理（特徴量整形/モデル保存読込）
+│   ├── train_predict.py   # 学習スクリプト（LightGBM/sklearn・モデル保存）
+│   ├── predict.py         # 保存モデルで出走前レースを予測
 │   ├── requirements.txt   # スクレイピングの依存
 │   └── requirements-ml.txt# 学習・予測の依存
 └── README.md
@@ -178,6 +180,8 @@ python scripts/train_predict.py --db keiba.db
 # CSVから / 複勝を予測 / 購入EV閾値や表示頭数を指定
 python scripts/train_predict.py --csv train.csv --target target_show
 python scripts/train_predict.py --db keiba.db --ev-threshold 1.2 --topk 3
+# モデルを保存（予測で再利用）
+python scripts/train_predict.py --db keiba.db --save-model model.pkl
 ```
 
 - **EV(単勝) = P(1着) × 単勝オッズ**。1.0 を超えると理論上の期待値プラス。
@@ -190,9 +194,32 @@ python scripts/train_predict.py --db keiba.db --ev-threshold 1.2 --topk 3
 > 出力はサンプル実装です。実運用には十分なデータ量・特徴量の追加・期間を分けた
 > 厳密な検証が必要で、回収率の保証はありません。馬券は自己責任で。
 
+## これから走るレースを予想する
+
+保存したモデルで、**結果がまだ出ていないレース**を予想できます。出馬表を取り込むと
+`results` に `finish_position=NULL` で登録され、`v_features` は過去走のみから特徴量を
+作るため、結果未確定でも予測できます。
+
+```bash
+# 1) 出馬表（出走前）を取り込む（複数レース可）
+python scripts/scraper.py --shutuba --db keiba.db 202406010111
+
+# 2) 特徴量ビューを最新化
+sqlite3 keiba.db < schema/features.sql
+
+# 3) 保存済みモデルで予測（既定では結果未確定レースを自動で対象に）
+python scripts/predict.py --db keiba.db --model model.pkl
+# 特定レースだけ / EV閾値で買い目候補に絞る
+python scripts/predict.py --db keiba.db --model model.pkl --race-id 202406010111
+python scripts/predict.py --db keiba.db --model model.pkl --ev-threshold 1.2
+```
+
+`predict.py` は各馬の的中確率 `p` と期待値 `ev = p × 単勝オッズ` を高い順に表示します。
+学習時は出走前レース（正解ラベルが無い）を自動で除外します。
+
 ## 今後の拡張アイデア
 
 - 調教（追い切り）データ、コーナー通過順位の構造化
 - オッズの時系列（前日→締切）テーブル
 - 騎手・血統の同条件成績を結合した特徴量
-- 学習済みモデルの保存/読込と、出走前レース（結果未確定）への予測適用
+- 確率較正（calibration）や馬連・ワイド等の組み合わせ買い目の最適化
