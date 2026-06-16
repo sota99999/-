@@ -319,6 +319,17 @@ def upsert_race(conn: sqlite3.Connection, parsed: dict) -> None:
 
 
 # -----------------------------------------------------------------------------
+# 1レース取り込み（取得→パース→投入をまとめたヘルパ）
+# -----------------------------------------------------------------------------
+def ingest_race(conn: sqlite3.Connection, race_id: str) -> dict:
+    """race_id を取得・パースして DB へ投入し、parse 結果を返す。"""
+    html = fetch_html(race_id)
+    parsed = parse_race(html, race_id)
+    upsert_race(conn, parsed)
+    return parsed
+
+
+# -----------------------------------------------------------------------------
 # CLI
 # -----------------------------------------------------------------------------
 def main(argv=None) -> int:
@@ -332,9 +343,7 @@ def main(argv=None) -> int:
 
     for i, race_id in enumerate(args.race_ids):
         try:
-            html = fetch_html(race_id)
-            parsed = parse_race(html, race_id)
-            upsert_race(conn, parsed)
+            parsed = ingest_race(conn, race_id)
             n = len(parsed["results"])
             print(f"[OK] {race_id}: {parsed['race'].get('race_name')} ({n}頭) を取り込み")
         except Exception as e:  # noqa: BLE001  個別レースの失敗で全体を止めない
