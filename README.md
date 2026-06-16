@@ -183,6 +183,8 @@ python scripts/crawler.py --db keiba.db --from 2024-01-01 --to 2026-06-15
 | 脚質・展開 | 脚質(run_style_prior, 通過順位から) / 展開ペース推定(race_pace_estimate) |
 | 騎手 | 騎手の過去騎乗数・勝率・複勝率（リーク防止の集計） |
 | コース実績 | 同 競馬場×馬場種別 での過去出走数・複勝率 |
+| 適性 | 道悪(off_show_rate) / 距離帯(dist_show_rate) / 回り(dir_show_rate) 別の過去複勝率 |
+| 直近フォーム | 直近3走の複勝率(recent3_show_rate) / 平均着順(recent3_avg_finish) |
 | 前走情報 | 前走着順・人気・馬場・距離 / 前走間隔(日) / 距離変更幅 |
 | ローテ | 前走クラス / 昇降級(class_change) / 休み明け / 連闘 / 芝ダ替わり / 叩き何戦目(races_since_layoff) |
 | ターゲット | `target_win`（1着か）, `target_show`（3着以内か） |

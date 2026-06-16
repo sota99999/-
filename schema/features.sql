@@ -104,7 +104,15 @@ WITH raw AS (
             WHEN ra.race_name LIKE '%ステークス%' OR ra.race_name LIKE '%特別%'
               OR ra.race_name LIKE '%記念%'   OR ra.race_name LIKE '%賞%' THEN 6
             ELSE 0
-        END AS class_level
+        END AS class_level,
+        -- 距離帯（距離適性の集計キー）
+        CASE WHEN ra.distance < 1400 THEN 'sprint'
+             WHEN ra.distance < 1800 THEN 'mile'
+             WHEN ra.distance < 2200 THEN 'mid'
+             ELSE 'long' END AS dist_band,
+        -- 道悪フラグ（良以外）
+        CASE WHEN ra.track_condition IS NOT NULL AND ra.track_condition <> '良'
+             THEN 1 ELSE 0 END AS is_offtrack
     FROM results r
     JOIN races  ra ON r.race_id  = ra.race_id
     LEFT JOIN horses h ON r.horse_id = h.horse_id
@@ -137,6 +145,19 @@ base AS (
         -- 同コース実績（馬×競馬場×馬場種別、当該レースを除く）
         COUNT(*) OVER w_course                            AS course_runs_prior,
         ROUND(1.0 * SUM(finish_position <= 3) OVER w_course / COUNT(*) OVER w_course, 3) AS course_show_rate_prior,
+        -- 適性: 道悪（過去の道悪レースだけの複勝率）。道悪未経験なら NULL
+        SUM(is_offtrack) OVER w_hist                      AS off_runs_prior,
+        ROUND(1.0 * SUM(CASE WHEN is_offtrack = 1 AND finish_position <= 3 THEN 1 ELSE 0 END) OVER w_hist
+              / NULLIF(SUM(is_offtrack) OVER w_hist, 0), 3) AS off_show_rate_prior,
+        -- 適性: 距離帯（同じ距離帯での過去複勝率）
+        COUNT(*) OVER w_dist                              AS dist_runs_prior,
+        ROUND(1.0 * SUM(finish_position <= 3) OVER w_dist / COUNT(*) OVER w_dist, 3) AS dist_show_rate_prior,
+        -- 適性: 回り（同じ右/左回りでの過去複勝率）
+        COUNT(*) OVER w_dir                               AS dir_runs_prior,
+        ROUND(1.0 * SUM(finish_position <= 3) OVER w_dir / COUNT(*) OVER w_dir, 3) AS dir_show_rate_prior,
+        -- 直近フォーム（直近3走の複勝率・平均着順、当該レースを除く）
+        ROUND(1.0 * SUM(finish_position <= 3) OVER w_recent / COUNT(*) OVER w_recent, 3) AS recent3_show_rate,
+        ROUND(AVG(finish_position) OVER w_recent, 2)      AS recent3_avg_finish,
         -- 前走情報・ローテーション
         LAG(finish_position) OVER w_ord                   AS prev_finish,
         LAG(popularity)      OVER w_ord                   AS prev_popularity,
@@ -156,7 +177,15 @@ base AS (
         w_jockey AS (PARTITION BY jockey_id ORDER BY race_date
                      ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING),
         w_course AS (PARTITION BY horse_id, venue_id, surface ORDER BY race_date
-                     ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING)
+                     ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING),
+        -- 距離帯別・回り別の過去走のみ（現在行を除く）
+        w_dist   AS (PARTITION BY horse_id, dist_band ORDER BY race_date
+                     ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING),
+        w_dir    AS (PARTITION BY horse_id, direction ORDER BY race_date
+                     ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING),
+        -- 直近3走（現在行の直前3走）
+        w_recent AS (PARTITION BY horse_id ORDER BY race_date
+                     ROWS BETWEEN 3 PRECEDING AND 1 PRECEDING)
 ),
 rot AS (
     -- ローテ: 休み明け(70日超 or 初出走)で区切り番号を増やし「叩き何戦目」を数える
@@ -180,6 +209,11 @@ SELECT
     run_style_prior, avg_class_level_prior, class_adj_speed_prior,
     jockey_rides_prior, jockey_win_rate_prior, jockey_show_rate_prior,
     course_runs_prior, course_show_rate_prior,
+    -- 適性・直近フォーム（再収集不要・既存データから導出）
+    off_runs_prior, off_show_rate_prior,                 -- 道悪適性
+    dist_runs_prior, dist_show_rate_prior,               -- 距離適性
+    dir_runs_prior, dir_show_rate_prior,                 -- 回り適性
+    recent3_show_rate, recent3_avg_finish,               -- 直近3走フォーム
     prev_finish, prev_popularity, prev_surface, prev_distance, days_since_last, distance_change,
     -- ---- ローテーション（再収集不要・既存データから導出） ------------------
     prev_class_level,                                     -- 前走のクラス格
