@@ -27,6 +27,7 @@ netkeiba 等からスクレイピングしたデータを格納し、予想に�
 │   ├── scraper.py         # netkeiba 単一レース取り込み
 │   ├── crawler.py         # 未取得レースだけを巡回する差分クローラ
 │   ├── export_features.py # 学習用 特徴量CSVエクスポート
+│   ├── compute_ratings.py # 馬Eloレーティング算出（horse_ratings へ保存）
 │   ├── mlcommon.py        # 学習・予測の共通処理（特徴量整形/モデル保存読込）
 │   ├── train_predict.py   # 学習スクリプト（LightGBM/sklearn・較正・モデル保存）
 │   ├── predict.py         # 保存モデルで出走前レースを予測（単勝・ケリー資金配分）
@@ -178,14 +179,19 @@ python scripts/crawler.py --db keiba.db --from 2024-01-01 --to 2026-06-15
 | 馬体 | 馬体重 / 馬体重増減 |
 | 通算成績 | 過去出走数 / 勝率・複勝率 / 平均着順 / 自己ベスト上がり |
 | スピード | 過去平均スピード指数 / 自己最高スピード指数 / 前走スピード指数 |
+| 能力(相対) | Eloレーティング(elo_before) / クラス格(class_level) / クラス補正スピード(class_adj_speed_prior) / 平均クラス格 |
 | 脚質・展開 | 脚質(run_style_prior, 通過順位から) / 展開ペース推定(race_pace_estimate) |
 | 騎手 | 騎手の過去騎乗数・勝率・複勝率（リーク防止の集計） |
 | コース実績 | 同 競馬場×馬場種別 での過去出走数・複勝率 |
 | 前走情報 | 前走着順・人気・馬場・距離 / 前走間隔(日) / 距離変更幅 |
 | ターゲット | `target_win`（1着か）, `target_show`（3着以内か） |
 
+Eloレーティング(`elo_before`)は順序依存のため、SQLではなく専用スクリプトで
+算出して `horse_ratings` に保存します。**特徴量ビューを作る前に実行**してください。
+
 ```bash
-sqlite3 keiba.db < schema/features.sql          # ビュー作成
+python scripts/compute_ratings.py --db keiba.db   # Elo算出（数秒〜）
+sqlite3 keiba.db < schema/features.sql            # 特徴量ビュー作成
 
 # 学習用データを CSV 出力（scikit-learn / LightGBM 等の入力に）
 python scripts/export_features.py --db keiba.db -o train.csv --min-runs 3

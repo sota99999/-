@@ -125,6 +125,19 @@ CREATE TABLE IF NOT EXISTS payouts (
     PRIMARY KEY (race_id, bet_type, combination)
 );
 
+-- -----------------------------------------------------------------------------
+-- 馬レーティング（Elo）
+--   各馬が各レースに「入る直前」の強さ(elo_before)を保存する。
+--   着順を基に scripts/compute_ratings.py が時系列で計算・投入する。
+--   elo_before は当該レースより前の結果だけから決まるため、特徴量に使ってもリークしない。
+-- -----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS horse_ratings (
+    race_id    TEXT NOT NULL REFERENCES races(race_id),
+    horse_id   TEXT NOT NULL REFERENCES horses(horse_id),
+    elo_before REAL,                 -- レース直前のEloレーティング
+    PRIMARY KEY (race_id, horse_id)
+);
+
 -- =============================================================================
 -- インデックス: 分析クエリ・JOINを高速化
 -- =============================================================================
