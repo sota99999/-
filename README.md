@@ -27,7 +27,9 @@ netkeiba 等からスクレイピングしたデータを格納し、予想に�
 │   ├── scraper.py         # netkeiba 単一レース取り込み
 │   ├── crawler.py         # 未取得レースだけを巡回する差分クローラ
 │   ├── export_features.py # 学習用 特徴量CSVエクスポート
-│   └── requirements.txt   # 依存パッケージ
+│   ├── train_predict.py   # 学習・予測サンプル（LightGBM/sklearn）
+│   ├── requirements.txt   # スクレイピングの依存
+│   └── requirements-ml.txt# 学習・予測の依存
 └── README.md
 ```
 
@@ -163,9 +165,34 @@ sqlite3 keiba.db < schema/features.sql          # ビュー作成
 python scripts/export_features.py --db keiba.db -o train.csv --min-runs 3
 ```
 
+## 学習・予測
+
+`scripts/train_predict.py` が `v_features` を読み、単勝(1着)/複勝(3着以内)を
+予測するモデルを学習し、**各馬の的中確率と期待値(EV)** を出力します。
+
+```bash
+pip install -r scripts/requirements-ml.txt
+
+# DBから直接（既定: 単勝を予測）
+python scripts/train_predict.py --db keiba.db
+# CSVから / 複勝を予測 / 購入EV閾値や表示頭数を指定
+python scripts/train_predict.py --csv train.csv --target target_show
+python scripts/train_predict.py --db keiba.db --ev-threshold 1.2 --topk 3
+```
+
+- **EV(単勝) = P(1着) × 単勝オッズ**。1.0 を超えると理論上の期待値プラス。
+- 学習/検証は `race_date` による**時系列分割**（古い→学習・新しい→検証）で行い、
+  リークを避けます。出力には AUC・LogLoss と、検証データでの**単勝回収率
+  バックテスト**（EV閾値以上の馬に100円ずつ賭けた場合の的中率・回収率）を含みます。
+- **LightGBM** があればそれを、無ければ scikit-learn の
+  `HistGradientBoostingClassifier` を自動で使います。
+
+> 出力はサンプル実装です。実運用には十分なデータ量・特徴量の追加・期間を分けた
+> 厳密な検証が必要で、回収率の保証はありません。馬券は自己責任で。
+
 ## 今後の拡張アイデア
 
 - 調教（追い切り）データ、コーナー通過順位の構造化
 - オッズの時系列（前日→締切）テーブル
 - 騎手・血統の同条件成績を結合した特徴量
-- 学習〜予測のサンプル（LightGBM 等）の追加
+- 学習済みモデルの保存/読込と、出走前レース（結果未確定）への予測適用

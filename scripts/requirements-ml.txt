@@ -1,0 +1,5 @@
+# 学習・予測 (train_predict.py) 用の依存
+pandas>=2.0
+numpy>=1.24
+scikit-learn>=1.3
+lightgbm>=4.0     # 未導入時は scikit-learn の HistGradientBoosting に自動フォールバック
