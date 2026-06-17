@@ -31,6 +31,7 @@ netkeiba 等からスクレイピングしたデータを格納し、予想に�
 │   ├── mlcommon.py        # 学習・予測の共通処理（特徴量整形/モデル保存読込）
 │   ├── train_predict.py   # 学習スクリプト（LightGBM/sklearn・較正・モデル保存）
 │   ├── walkforward.py     # ウォークフォワード検証（期間をずらし安定性を確認）
+│   ├── weekly.py          # 毎週の更新～予想を1コマンドで実行するまとめ役
 │   ├── predict.py         # 保存モデルで出走前レースを予測（単勝・ケリー資金配分）
 │   ├── bet_optimizer.py   # 馬連/ワイド/三連複/三連単の期待値最適化/バックテスト
 │   ├── requirements.txt   # スクレイピングの依存
@@ -278,6 +279,26 @@ python scripts/bet_optimizer.py --db keiba.db --model model_win.pkl --predict --
 
 > モデル(model_win.pkl 等)は一度学習すれば使い回せます。新しい結果が増えたら
 > 定期的に再収集→再学習すると精度が保てます。
+
+## 毎週の運用を1コマンドで（weekly.py）
+
+`weekly.py` が「①新着結果の収集 → ②今週の出馬表 → ③Elo再計算 → ④特徴量更新 →
+⑤再学習(任意) → ⑥予想」を順に実行します。毎週これ1本でOKです。
+
+```bash
+# 毎週: 先週結果を取り込み、今週分を予想（既存モデルを使用）
+python scripts/weekly.py --db keiba.db --raceday 2026-06-21 --bankroll 10000
+
+# ときどき: 再学習も一緒に（新しい結果を学習に反映）
+python scripts/weekly.py --db keiba.db --raceday 2026-06-21 --retrain
+
+# 何が走るか確認だけ（実行しない）
+python scripts/weekly.py --db keiba.db --raceday 2026-06-21 --dry-run
+```
+
+- 結果収集は「前回収集した最新日〜今日」を自動判定して差分取得します（重複なし）。
+- `--raceday` を省略するとデータ更新だけ行います。
+- 複勝モデルや連勝式の買い目は完了後に表示される追加コマンドで確認できます。
 
 保存したモデルで、**結果がまだ出ていないレース**を予想できます。出馬表を取り込むと
 `results` に `finish_position=NULL` で登録され、`v_features` は過去走のみから特徴量を
