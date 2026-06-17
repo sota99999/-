@@ -85,6 +85,9 @@ def main(argv=None) -> int:
     parser.add_argument("--to", dest="date_to", help="終了日 (YYYY-MM-DD)")
     parser.add_argument("--dry-run", action="store_true",
                         help="取得対象の一覧表示のみ。DBへ書き込まない")
+    parser.add_argument("--shutuba", action="store_true",
+                        help="確定結果でなくその日の全レースの出馬表（出走前）を取り込む。"
+                             "予想対象日のカードを丸ごと登録する用途。既存も再取得しオッズを更新")
     args = parser.parse_args(argv)
 
     # 対象日の決定
@@ -110,23 +113,26 @@ def main(argv=None) -> int:
             time.sleep(scraper.REQUEST_INTERVAL)
             continue
 
-        new_ids = filter_new(conn, all_ids)
-        # 中断後の再実行では取得済みは自動スキップされる（差分クロール）
-        print(f"== {prefix}: 開催{len(all_ids)}R / 未取得{len(new_ids)}R "
+        # 出馬表モードはオッズ更新のため取得済みも対象（差分スキップしない）
+        target_ids = all_ids if args.shutuba else filter_new(conn, all_ids)
+        kind = "出馬表" if args.shutuba else "結果"
+        label = "全" if args.shutuba else "未取得"
+        print(f"== {prefix}: 開催{len(all_ids)}R / {label}{len(target_ids)}R "
               f"（累計 取込{total_new} 失敗{total_ng}）")
 
         if args.dry_run:
-            for rid in new_ids:
-                print(f"   would fetch {rid}")
+            for rid in target_ids:
+                print(f"   would fetch {rid} ({kind})")
             time.sleep(scraper.REQUEST_INTERVAL)
             continue
 
-        for rid in new_ids:
+        ingest = scraper.ingest_shutuba if args.shutuba else scraper.ingest_race
+        for rid in target_ids:
             try:
-                parsed = scraper.ingest_race(conn, rid)
+                parsed = ingest(conn, rid)
                 total_new += 1
                 print(f"   [OK] {rid}: {parsed['race'].get('race_name')} "
-                      f"({len(parsed['results'])}頭)")
+                      f"({len(parsed['results'])}頭, {kind})")
             except Exception as e:  # noqa: BLE001
                 total_ng += 1
                 print(f"   [NG] {rid}: {e}", file=sys.stderr)

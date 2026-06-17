@@ -30,6 +30,7 @@ netkeiba 等からスクレイピングしたデータを格納し、予想に�
 │   ├── compute_ratings.py # 馬Eloレーティング算出（horse_ratings へ保存）
 │   ├── mlcommon.py        # 学習・予測の共通処理（特徴量整形/モデル保存読込）
 │   ├── train_predict.py   # 学習スクリプト（LightGBM/sklearn・較正・モデル保存）
+│   ├── walkforward.py     # ウォークフォワード検証（期間をずらし安定性を確認）
 │   ├── predict.py         # 保存モデルで出走前レースを予測（単勝・ケリー資金配分）
 │   ├── bet_optimizer.py   # 馬連/ワイド/三連複/三連単の期待値最適化/バックテスト
 │   ├── requirements.txt   # スクレイピングの依存
@@ -233,7 +234,50 @@ python scripts/train_predict.py --db keiba.db --calibrate isotonic --save-model 
 > 出力はサンプル実装です。実運用には十分なデータ量・特徴量の追加・期間を分けた
 > 厳密な検証が必要で、回収率の保証はありません。馬券は自己責任で。
 
+## ウォークフォワード検証（モデルを信用してよいか）
+
+1回の分割だけでは「たまたま当たり期間だった」可能性があります。`walkforward.py` は
+期間を時系列にずらしながら「過去で学習→次区間で検証」を繰り返し、AUC・回収率の
+**平均と安定性（ばらつき）** を出します。
+
+```bash
+python scripts/walkforward.py --db keiba.db --folds 4 --calibrate isotonic
+python scripts/walkforward.py --db keiba.db --target target_show --folds 5
+```
+
+回収率が複数区間で安定して100%超なら“使える”候補。1区間だけの突出は過信しないこと。
+
 ## これから走るレースを予想する
+
+`v_features` は過去走のみから特徴量を作るので、結果が出ていないレースも予測できます。
+出馬表を取り込むと `results` に `finish_position=NULL` で登録されます。
+
+### 1レースだけ予想する
+
+```bash
+python scripts/scraper.py --shutuba --db keiba.db 202406010111
+```
+
+### その日の全レースをまとめて予想する（全中央競馬の運用向け）
+
+開催日を指定すると、その日の**全レースの出馬表を一括取得**できます（オッズ更新のため
+取得済みも再取得）。Eloと特徴量を更新後、`predict.py` は結果未確定の全レースを予想します。
+
+```bash
+# 1) 予想したい開催日の全レースの出馬表を取得
+python scripts/crawler.py --shutuba --db keiba.db --date 2026-06-21
+
+# 2) Eloと特徴量ビューを更新（出走馬に最新レーティングを付与）
+python scripts/compute_ratings.py --db keiba.db
+sqlite3 keiba.db < schema/features.sql
+
+# 3) 全レースを予想（単勝モデル＋資金配分、複勝モデルや連勝式も同様に）
+python scripts/predict.py --db keiba.db --model model_win.pkl --bankroll 10000
+python scripts/bet_optimizer.py --db keiba.db --model model_win.pkl --predict --bet trio --topn 5
+```
+
+> モデル(model_win.pkl 等)は一度学習すれば使い回せます。新しい結果が増えたら
+> 定期的に再収集→再学習すると精度が保てます。
 
 保存したモデルで、**結果がまだ出ていないレース**を予想できます。出馬表を取り込むと
 `results` に `finish_position=NULL` で登録され、`v_features` は過去走のみから特徴量を
