@@ -38,6 +38,7 @@ def main(argv=None) -> int:
     p = argparse.ArgumentParser(description="全頭診断")
     p.add_argument("--db", default="keiba.db")
     p.add_argument("--model", default="model_win_noodds.pkl")
+    p.add_argument("--show-model", help="複勝率も表示する場合の複勝モデル（例: model_show_noodds.pkl）")
     p.add_argument("--race-id", help="このレースだけ")
     p.add_argument("--date", help="この開催日の全レース (YYYY-MM-DD)")
     p.add_argument("--top", type=int, default=0, help="上位何頭まで表示（0=全頭）")
@@ -45,6 +46,7 @@ def main(argv=None) -> int:
 
     bundle = mlcommon.load_model(args.model)
     model = bundle["model"]
+    show_bundle = mlcommon.load_model(args.show_model) if args.show_model else None
     df = mlcommon.load_data(args.db, None)
 
     conn = sqlite3.connect(args.db)
@@ -68,15 +70,20 @@ def main(argv=None) -> int:
     sub["p_raw"] = model.predict_proba(x)[:, 1]
     # レース内で合計1に正規化（全頭診断の勝率として読みやすくする）
     sub = mlcommon.normalize_by_race(sub, prob_col="p_raw", out_col="p")
+    # 複勝率（3着以内確率）。較正済みの素の確率をそのまま使う（合計1にはしない）
+    if show_bundle:
+        xs = mlcommon.build_features(sub, feature_columns=show_bundle["feature_columns"])
+        sub["show_p"] = show_bundle["model"].predict_proba(xs)[:, 1]
     # EVは較正済みの素の確率×オッズ（正規化前）で算出
     sub["ev"] = sub["p_raw"] * pd.to_numeric(sub.get("odds"), errors="coerce")
 
+    fuku_h = f"{'複勝率':>7}" if show_bundle else ""
     for rid, g in sub.groupby("race_id"):
         g = g.sort_values("p", ascending=False).reset_index(drop=True)
         if args.top:
             g = g.head(args.top)
         print(f"\n=== {rid}  {names.get(rid, '')} ===")
-        print(f"{'印':<2}{'馬番':>3} {'馬名':<13}{'勝率':>6} {'オッズ':>6} "
+        print(f"{'印':<2}{'馬番':>3} {'馬名':<13}{'勝率':>6}{fuku_h} {'オッズ':>6} "
               f"{'Elo':>5} {'近走複勝':>7} {'平均SP':>6} {'脚質':>5}")
         for i, r in g.iterrows():
             mark = MARKS[i] if i < len(MARKS) else "  "
@@ -85,12 +92,13 @@ def main(argv=None) -> int:
             kyaku = "  -"
             if rs is not None and not pd.isna(rs):
                 kyaku = "逃げ" if rs < 0.25 else "先行" if rs < 0.5 else "差し" if rs < 0.75 else "追込"
+            fuku = f"{_f(r.get('show_p', float('nan'))*100, '6.1f')}%" if show_bundle else ""
             print(f"{mark:<2}{int(r['horse_number']):>3} {str(r['horse_name'])[:13]:<13}"
-                  f"{_f(r['p']*100, '5.1f')}% {_f(r.get('odds'), '6.1f')} "
+                  f"{_f(r['p']*100, '5.1f')}%{fuku} {_f(r.get('odds'), '6.1f')} "
                   f"{_f(r.get('elo_before'), '5.0f')} "
                   f"{_f((r.get('recent3_show_rate') or float('nan'))*100, '6.0f')}% "
                   f"{_f(r.get('avg_speed_prior'), '6.1f')} {kyaku:>5}")
-    print("\n※ 勝率はモデルの推定。印は勝率順（◎○▲△）。馬券は自己責任で。")
+    print("\n※ 勝率=1着, 複勝率=3着内 のモデル推定。印は勝率順。馬券は自己責任で。")
     return 0
 
 
