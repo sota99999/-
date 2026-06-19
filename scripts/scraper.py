@@ -32,6 +32,9 @@ from bs4 import BeautifulSoup
 
 BASE_URL = "https://db.netkeiba.com/race/{race_id}/"
 SHUTUBA_URL = "https://race.netkeiba.com/race/shutuba.html?race_id={race_id}"  # 出馬表
+# 単勝・複勝オッズのJSON API（type=1）。出馬表ページのJS描画オッズの代わりに使う
+ODDS_API = ("https://race.netkeiba.com/api/api_get_jra_odds.html"
+            "?race_id={race_id}&type=1&action=update")
 ENCODING = "euc-jp"               # db.netkeiba.com は EUC-JP
 REQUEST_INTERVAL = 1.5            # リクエスト間隔(秒)。マナーとして必須
 MAX_RETRIES = 4                   # ネットワーク/一時エラー時の最大リトライ回数
@@ -506,6 +509,49 @@ def ingest_shutuba(conn: sqlite3.Connection, race_id: str) -> dict:
     parsed = parse_shutuba(html, race_id)
     upsert_race(conn, parsed)
     return parsed
+
+
+# -----------------------------------------------------------------------------
+# オッズ取得（JSON API）
+#   出馬表ページのオッズはJSで動的描画され静的取得できないため、
+#   netkeiba の単勝オッズ JSON API から取得して results を更新する。
+# -----------------------------------------------------------------------------
+def fetch_odds(race_id: str) -> dict[int, float]:
+    """{馬番: 単勝オッズ} を返す。取得できなければ空 dict。"""
+    import json
+    raw = http_get(ODDS_API.format(race_id=race_id), encoding="utf-8")
+    data = json.loads(raw)
+    win = (data.get("data", {}) or {}).get("odds", {}).get("1", {})  # "1"=単勝
+    out: dict[int, float] = {}
+    for k, v in win.items():
+        try:
+            num = int(k)
+            # v は ["3.2", "1", ...] のような配列。先頭が単勝オッズ
+            od = float(v[0] if isinstance(v, (list, tuple)) else v)
+            if od > 0:
+                out[num] = od
+        except (ValueError, TypeError, IndexError):
+            continue
+    return out
+
+
+def update_odds(conn: sqlite3.Connection, race_id: str) -> int:
+    """オッズAPIから単勝オッズを取得し、results の odds/popularity を更新する。
+
+    人気は単勝オッズの昇順から算出する（API依存を避ける）。更新した頭数を返す。
+    """
+    om = fetch_odds(race_id)
+    if not om:
+        return 0
+    order = sorted(om, key=lambda n: om[n])
+    pop = {n: i + 1 for i, n in enumerate(order)}
+    for num, od in om.items():
+        conn.execute(
+            "UPDATE results SET odds=?, popularity=? WHERE race_id=? AND horse_number=?",
+            (od, pop[num], race_id, num),
+        )
+    conn.commit()
+    return len(om)
 
 
 # -----------------------------------------------------------------------------
