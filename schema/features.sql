@@ -22,7 +22,8 @@
 --   → 平均ちょうどで 50、平均より 1% 速いと +10。値が大きいほど速い。
 --   標準偏差(sqrt)を使わず移植性を確保している。母数が少ないバケットは NULL。
 -- -----------------------------------------------------------------------------
-DROP VIEW IF EXISTS v_features;   -- v_speed に依存するため先に落とす
+DROP VIEW IF EXISTS v_features;   -- v_speed/v_course_bias に依存するため先に落とす
+DROP VIEW IF EXISTS v_course_bias;
 DROP VIEW IF EXISTS v_speed;
 
 -- Eloレーティング表が無くても v_features を作れるよう、空でも用意しておく
@@ -63,6 +64,33 @@ SELECT
         ELSE NULL
     END AS speed_index
 FROM base;
+
+
+-- -----------------------------------------------------------------------------
+-- v_course_bias: コース別の内外枠バイアス
+--   (競馬場×馬場種別×距離帯) ごとに、内枠半分と外枠半分の複勝率の差を集計。
+--   inner_bias > 0 = 内枠有利, < 0 = 外枠有利。長期の統計なのでリークは無視できる。
+-- -----------------------------------------------------------------------------
+CREATE VIEW v_course_bias AS
+WITH d AS (
+    SELECT
+        ra.venue_id, ra.surface,
+        CASE WHEN ra.distance < 1400 THEN 'sprint'
+             WHEN ra.distance < 1800 THEN 'mile'
+             WHEN ra.distance < 2200 THEN 'mid'
+             ELSE 'long' END AS dist_band,
+        1.0 * r.post_position / ra.field_size AS dr,
+        CASE WHEN r.finish_position <= 3 THEN 1.0 ELSE 0.0 END AS placed
+    FROM results r JOIN races ra ON r.race_id = ra.race_id
+    WHERE r.finish_position IS NOT NULL AND ra.field_size > 0 AND r.post_position IS NOT NULL
+)
+SELECT
+    venue_id, surface, dist_band,
+    COUNT(*) AS n,
+    ROUND(AVG(CASE WHEN dr <  0.5 THEN placed END)
+        - AVG(CASE WHEN dr >= 0.5 THEN placed END), 4) AS inner_bias
+FROM d
+GROUP BY venue_id, surface, dist_band;
 
 
 -- -----------------------------------------------------------------------------
@@ -112,12 +140,22 @@ WITH raw AS (
              ELSE 'long' END AS dist_band,
         -- 道悪フラグ（良以外）
         CASE WHEN ra.track_condition IS NOT NULL AND ra.track_condition <> '良'
-             THEN 1 ELSE 0 END AS is_offtrack
+             THEN 1 ELSE 0 END AS is_offtrack,
+        -- コース別枠バイアス適合: 内枠有利コースで内枠なら正, 外枠なら負（n>=100のみ）
+        CASE WHEN cb.inner_bias IS NOT NULL AND cb.n >= 100 AND ra.field_size > 0
+             THEN ROUND(cb.inner_bias * (0.5 - 1.0 * r.post_position / ra.field_size) * 2, 4)
+             END AS draw_bias_fit
     FROM results r
     JOIN races  ra ON r.race_id  = ra.race_id
     LEFT JOIN horses h ON r.horse_id = h.horse_id
     LEFT JOIN v_speed s ON s.race_id = r.race_id AND s.horse_id = r.horse_id
     LEFT JOIN horse_ratings hr ON hr.race_id = r.race_id AND hr.horse_id = r.horse_id
+    LEFT JOIN v_course_bias cb
+           ON cb.venue_id = ra.venue_id AND cb.surface = ra.surface
+          AND cb.dist_band = CASE WHEN ra.distance < 1400 THEN 'sprint'
+                                  WHEN ra.distance < 1800 THEN 'mile'
+                                  WHEN ra.distance < 2200 THEN 'mid'
+                                  ELSE 'long' END
 ),
 base AS (
     SELECT
@@ -194,6 +232,12 @@ rot AS (
             OVER (PARTITION BY horse_id ORDER BY race_date
                   ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS layoff_group
     FROM base
+),
+withpace AS (
+    -- 展開（ペース）推定をレース単位で先に付与（pace_fit 計算のため）
+    SELECT rot.*,
+        ROUND(AVG(run_style_prior) OVER (PARTITION BY race_id), 3) AS race_pace_estimate
+    FROM rot
 )
 -- 最終出力: 当該レースの結果列（finish_position/speed_index/last_3f/passing 等）は出さない
 SELECT
@@ -223,6 +267,11 @@ SELECT
     CASE WHEN prev_surface IS NOT NULL AND prev_surface <> surface THEN 1 ELSE 0 END AS surface_change, -- 芝⇄ダ替わり
     ROW_NUMBER() OVER (PARTITION BY horse_id, layoff_group ORDER BY race_date)  AS races_since_layoff, -- 叩き何戦目
     -- 展開（ペース）推定: 出走各馬の脚質の平均（低い=前残り少なめ=ハイペース傾向）
-    ROUND(AVG(run_style_prior) OVER (PARTITION BY race_id), 3) AS race_pace_estimate,
+    race_pace_estimate,
+    -- 展開×脚質適合: 差し馬×ハイペース / 逃げ馬×スローペースで正（展開に恵まれる）
+    CASE WHEN run_style_prior IS NOT NULL AND race_pace_estimate IS NOT NULL
+         THEN ROUND(-(run_style_prior - 0.5) * (race_pace_estimate - 0.5) * 4, 3)
+         END AS pace_fit,
+    draw_bias_fit,                                        -- コース別枠バイアス適合
     target_win, target_show
-FROM rot;
+FROM withpace;
