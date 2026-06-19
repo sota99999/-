@@ -72,22 +72,32 @@ def estimate_condition(prior_mm: float, today_mm: float) -> tuple[str, str]:
 
 
 def update_weather(conn: sqlite3.Connection, date: str | None = None) -> int:
-    """出走前レースに天気予報ベースの馬場状態をセット。更新したグループ数を返す。"""
-    q = """SELECT DISTINCT ra.venue_id, ra.race_date
-           FROM races ra JOIN results r ON ra.race_id = r.race_id
-           WHERE r.finish_position IS NULL
-             AND ra.venue_id IS NOT NULL AND ra.race_date IS NOT NULL"""
-    params: tuple = ()
+    """出走前レース（全馬が結果未確定）に天気予報ベースの馬場状態をセット。
+
+    確定済みレース（除外・中止で一部 finish が NULL の馬がいる）は対象外。
+    更新した (開催地×日付) のグループ数を返す。
+    """
+    from collections import defaultdict
+    # 「全馬の finish が NULL」= まだ走っていないレースだけを対象にする
+    rows = conn.execute(
+        """SELECT ra.race_id, ra.venue_id, ra.race_date
+           FROM races ra
+           WHERE ra.venue_id IS NOT NULL AND ra.race_date IS NOT NULL
+             AND ra.race_id IN (SELECT race_id FROM results
+                                GROUP BY race_id HAVING COUNT(finish_position) = 0)"""
+    ).fetchall()
     if date:
-        q += " AND ra.race_date = ?"
-        params = (date,)
-    groups = conn.execute(q, params).fetchall()
-    if not groups:
-        print("対象レースがありません（出馬表に開催日が入っていますか?）", file=sys.stderr)
+        rows = [r for r in rows if r[2] == date]
+    if not rows:
+        print("対象レースがありません（出走前レースに開催日が入っていますか?）", file=sys.stderr)
         return 0
 
+    groups: dict[tuple[str, str], list[str]] = defaultdict(list)
+    for rid, venue, d in rows:
+        groups[(venue, d)].append(rid)
+
     n = 0
-    for venue, d in groups:
+    for (venue, d), rids in groups.items():
         if venue not in JRA_COORDS:
             continue
         try:
@@ -96,11 +106,10 @@ def update_weather(conn: sqlite3.Connection, date: str | None = None) -> int:
             print(f"[NG] {venue} {d}: 天気取得失敗 {e}", file=sys.stderr)
             continue
         cond, weather = estimate_condition(prior, today)
+        ph = ",".join("?" * len(rids))
         conn.execute(
-            """UPDATE races SET track_condition=?, weather=?
-               WHERE venue_id=? AND race_date=?
-                 AND race_id IN (SELECT race_id FROM results WHERE finish_position IS NULL)""",
-            (cond, weather, venue, d),
+            f"UPDATE races SET track_condition=?, weather=? WHERE race_id IN ({ph})",
+            (cond, weather, *rids),
         )
         n += 1
         print(f"[OK] {venue} {d}: 前日{prior:.0f}mm+当日{today:.0f}mm → 馬場「{cond}」/ {weather}")

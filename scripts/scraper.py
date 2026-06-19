@@ -511,7 +511,7 @@ def ingest_shutuba(conn: sqlite3.Connection, race_id: str, race_date: str | None
     """
     html = http_get(SHUTUBA_URL.format(race_id=race_id))
     parsed = parse_shutuba(html, race_id)
-    if race_date and not parsed["race"].get("race_date"):
+    if race_date:   # クローラ指定日を開催日の正とする（出走前ページは日付が不確実なため）
         parsed["race"]["race_date"] = race_date
     upsert_race(conn, parsed)
     return parsed
