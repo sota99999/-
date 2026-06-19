@@ -11,6 +11,11 @@
 #   # 特定日 / 特定レースだけ
 #   python scripts/card.py --db keiba.db --model model_win.pkl --date 2026-06-21
 #   python scripts/card.py --db keiba.db --model model_win.pkl --race-id 202609030411
+#
+# 評価比率（能力・適性を重く / 枠・展開・騎手を軽く）:
+#   各馬の「他馬比較での強さ(z)」をグループ別に重み付け合成し、モデル確率を
+#   持ち上げ/抑える。既定で 能力0.45 適性0.45 / 枠0.08 展開0.08 騎手0.08。
+#   --weights "ability=0.5,jockey=0.05" で個別変更、--lean で強さを一括調整。
 # =============================================================================
 from __future__ import annotations
 
@@ -38,6 +43,67 @@ STRENGTH = [
     ("draw_bias_fit",         "枠",     None,                0),
 ]
 
+# -----------------------------------------------------------------------------
+# 評価比率（リウェイト）の定義
+#   各馬の「他馬比較での強さ(z)」をグループ別に平均し、weights で重み付けして
+#   合成した値(tilt)でモデル確率を相対的に持ち上げ/抑える。
+#   能力・適性を重く、バイアス・展開・騎手を軽くするのが既定。
+#   GROUPS の各要素 = (特徴量列, サンプル数ゲート列, 最小数)
+# -----------------------------------------------------------------------------
+GROUPS = {
+    "ability":  [("elo_before", None, 0), ("avg_speed_prior", None, 0),
+                 ("class_adj_speed_prior", None, 0)],            # ①能力
+    "aptitude": [("course_show_rate_prior", "course_runs_prior", 2),
+                 ("dist_show_rate_prior", "dist_runs_prior", 2),
+                 ("off_show_rate_prior", "off_runs_prior", 2)],  # ②コース・距離・道悪適性
+    "bias":     [("draw_bias_fit", None, 0)],                    # ③トラック(枠)バイアス
+    "pace":     [("pace_fit", None, 0)],                         # ④レース展開
+    "jockey":   [("jockey_win_rate_prior", "jockey_rides_prior", 10)],  # ⑤騎手
+}
+# 既定の評価比率（数値が大きいほど予想で重視）。--weights / --lean で変更可
+DEFAULT_WEIGHTS = {"ability": 0.45, "aptitude": 0.45,
+                   "bias": 0.08, "pace": 0.08, "jockey": 0.08}
+GROUP_JP = {"ability": "能力", "aptitude": "適性",
+            "bias": "枠", "pace": "展開", "jockey": "騎手"}
+# 〔評価〕タグの重要度を比率に合わせるための 特徴量→グループ 対応
+COL2GROUP = {
+    "elo_before": "ability", "avg_speed_prior": "ability",
+    "course_show_rate_prior": "aptitude", "dist_show_rate_prior": "aptitude",
+    "dir_show_rate_prior": "aptitude", "off_show_rate_prior": "aptitude",
+    "jockey_win_rate_prior": "jockey", "pace_fit": "pace", "draw_bias_fit": "bias",
+}
+
+
+def parse_weights(s: str | None) -> dict:
+    """\"ability=0.5,jockey=0.1\" 形式の文字列を重み辞書に反映して返す。"""
+    w = dict(DEFAULT_WEIGHTS)
+    if s:
+        for part in s.split(","):
+            k, _, v = part.partition("=")
+            k = k.strip()
+            if k in w and v.strip():
+                try:
+                    w[k] = float(v)
+                except ValueError:
+                    pass
+    return w
+
+
+def _group_z(df: pd.DataFrame, members) -> pd.Series:
+    """グループ内 特徴量の z スコアを（ゲート・欠損を除いて）平均した Series。"""
+    parts = []
+    for col, gate, minr in members:
+        zc = col + "_z"
+        if zc not in df.columns:
+            continue
+        z = df[zc].where(df[col].notna())
+        if gate and gate in df.columns:
+            z = z.where(df[gate].fillna(0) >= minr)
+        parts.append(z)
+    if not parts:
+        return pd.Series(0.0, index=df.index)
+    return pd.concat(parts, axis=1).mean(axis=1, skipna=True).fillna(0.0)
+
 
 def _f(v, fmt, default="  -"):
     """NaN/None を安全に整形。"""
@@ -59,7 +125,15 @@ def main(argv=None) -> int:
     p.add_argument("--race-id", help="このレースだけ")
     p.add_argument("--date", help="この開催日の全レース (YYYY-MM-DD)")
     p.add_argument("--top", type=int, default=0, help="上位何頭まで表示（0=全頭）")
+    p.add_argument("--weights", help='評価比率を上書き。例 '
+                   '"ability=0.45,aptitude=0.45,bias=0.08,pace=0.08,jockey=0.08"。'
+                   '数値が大きいほど重視（既定で能力・適性を重く、枠/展開/騎手を軽く）')
+    p.add_argument("--lean", type=float, default=1.0,
+                   help="評価比率調整の強さ倍率。0=純モデル（調整なし）, 1=既定, 2=より強く")
     args = p.parse_args(argv)
+
+    weights = parse_weights(args.weights)
+    weights = {k: v * args.lean for k, v in weights.items()}
 
     bundle = mlcommon.load_model(args.model)
     model = bundle["model"]
@@ -83,48 +157,71 @@ def main(argv=None) -> int:
         print("対象レースがありません（出馬表を取り込みましたか? 日付指定は合っていますか?）")
         return 0
 
+    # レース内 z スコアを付与するヘルパ（★/〔評価〕/比率調整に共用）
+    def add_z(cols):
+        for c in dict.fromkeys(cols):
+            if c in sub.columns and (c + "_z") not in sub.columns:
+                gg = sub.groupby("race_id")[c]
+                sd = gg.transform("std").replace(0, np.nan)
+                sub[c + "_z"] = ((sub[c] - gg.transform("mean")) / sd).fillna(0.0)
+
+    # モデルの素の確率（単勝・複勝）
     x = mlcommon.build_features(sub, feature_columns=bundle["feature_columns"])
     sub["p_raw"] = model.predict_proba(x)[:, 1]
-    # レース内で合計1に正規化（全頭診断の勝率として読みやすくする）
-    sub = mlcommon.normalize_by_race(sub, prob_col="p_raw", out_col="p")
-    # 複勝率（3着以内確率）。1レースで3頭が3着以内に入るので、レース内で合計3に正規化
     if show_bundle:
         xs = mlcommon.build_features(sub, feature_columns=show_bundle["feature_columns"])
         sub["show_raw"] = show_bundle["model"].predict_proba(xs)[:, 1]
-        grp = sub.groupby("race_id")["show_raw"]
+
+    # === 評価比率の調整（能力・適性を重く、枠/展開/騎手を軽く） ===
+    #   各グループの「他馬比較での強さ(z)」を weights で重み付けして合成(tilt)し、
+    #   モデル確率を相対的に持ち上げ/抑える。weights を変えれば比率を再調整できる。
+    add_z([col for g in GROUPS.values() for col, *_ in g])
+    tilt = pd.Series(0.0, index=sub.index)
+    for gname, members in GROUPS.items():
+        tilt = tilt + weights.get(gname, 0.0) * _group_z(sub, members)
+    sub["tilt"] = tilt
+    # レース内で平均0に中心化 → 全体の確率水準（較正）をできるだけ保つ
+    sub["tilt"] = sub["tilt"] - sub.groupby("race_id")["tilt"].transform("mean")
+    adj = np.exp(sub["tilt"].clip(-2.0, 2.0))   # 過度な増幅は ±e^2 でクリップ
+
+    # 単勝: 調整後をレース内で合計1に正規化（読みやすい勝率に）
+    sub["p_adj"] = sub["p_raw"] * adj
+    sub = mlcommon.normalize_by_race(sub, prob_col="p_adj", out_col="p")
+    # 複勝率: 調整後をレース内で合計3（出走3頭未満ならその頭数）に正規化
+    if show_bundle:
+        sub["show_adj"] = sub["show_raw"] * adj
+        grp = sub.groupby("race_id")["show_adj"]
         s = grp.transform("sum")
-        cnt = grp.transform("size").clip(upper=3)   # 出走頭数が3未満ならその頭数
-        sub["show_p"] = (sub["show_raw"] / s.where(s > 0, 1.0) * cnt).clip(upper=0.99)
-    # EVは較正済みの素の確率×オッズ（正規化前）で算出
-    sub["ev"] = sub["p_raw"] * pd.to_numeric(sub.get("odds"), errors="coerce")
+        cnt = grp.transform("size").clip(upper=3)
+        sub["show_p"] = (sub["show_adj"] / s.where(s > 0, 1.0) * cnt).clip(upper=0.99)
+    # EVは調整後の素の確率×オッズ（正規化前）で算出
+    sub["ev"] = sub["p_adj"] * pd.to_numeric(sub.get("odds"), errors="coerce")
 
     # 印の基準（既定: 複勝率。--show-model が無ければ勝率）
     sort_col = "show_p" if (args.mark_by == "show" and show_bundle) else "p"
     mark_label = "複勝率" if sort_col == "show_p" else "勝率"
     has_odds = pd.to_numeric(sub.get("odds"), errors="coerce").notna().any()
 
-    # レース内 z スコア（★=突出して高い値 / 〔評価〕の強み判定に使用）
-    z_targets = ["p", "show_p", "ev", "elo_before", "avg_speed_prior"] + [c for c, *_ in STRENGTH]
-    for c in dict.fromkeys(z_targets):
-        if c in sub.columns:
-            gg = sub.groupby("race_id")[c]
-            sd = gg.transform("std").replace(0, np.nan)
-            sub[c + "_z"] = ((sub[c] - gg.transform("mean")) / sd).fillna(0.0)
+    # ★/〔評価〕用の z（調整後の p/show_p/ev と、表示する Elo/SP）
+    add_z(["p", "show_p", "ev", "elo_before", "avg_speed_prior"] + [c for c, *_ in STRENGTH])
 
     def st(r, c):   # 突出値マーク（出走馬中で z>=1.5）
         return "★" if r.get(c + "_z", 0) >= 1.5 else ""
 
-    def hyoten(r):  # 他馬比較で目立つ強み(◎)/弱み(▼)
+    def hyoten(r):  # 他馬比較で目立つ強み(◎)/弱み(▼)。評価比率に応じて重要度を調整
         tags = []
         for col, label, gate, minr in STRENGTH:
             if col not in sub.columns or pd.isna(r.get(col)):
                 continue
             if gate and (r.get(gate) or 0) < minr:
                 continue
-            if r.get(col + "_z", 0) >= 1.0:
-                tags.append((r[col + "_z"], f"{label}◎"))
+            z = r.get(col + "_z", 0)
+            if z >= 1.0:
+                # 比率の低いグループ（枠/展開/騎手）の強みは見出しに上がりにくくする
+                wf = weights.get(COL2GROUP.get(col, ""), 0.40)
+                tags.append((z * wf, z, f"{label}◎"))
         tags.sort(reverse=True)
-        out = [t for _, t in tags[:3]]
+        out = [t for *_, t in tags[:3]]
         if (r.get("runs_prior") or 0) >= 3 and (r.get("recent3_show_rate") or 0) == 0:
             out.append("近走▼")
         return out
@@ -157,7 +254,14 @@ def main(argv=None) -> int:
         if lines:
             print("  〔評価〕 " + " ｜ ".join(lines))
     foot = "EV>1.0は妙味の目安。" if has_odds else ""
-    print(f"\n※印は{mark_label}順。★=出走馬中で突出して高い値。"
+    base = parse_weights(args.weights)   # lean を掛ける前の比率を表示
+    wtxt = "・".join(f"{GROUP_JP[g]}{base[g]:.2f}" for g in GROUPS)
+    if args.lean == 0:
+        wtxt = "調整なし（純モデル）"
+    elif args.lean != 1.0:
+        wtxt += f"（×{args.lean:g}）"
+    print(f"\n※評価比率 {wtxt}（数値が大きいほど予想で重視）。")
+    print(f"※印は{mark_label}順。★=出走馬中で突出して高い値。"
           f"〔評価〕は他馬比較で目立つ強み◎/弱み▼。{foot}馬券は自己責任で。")
     return 0
 
