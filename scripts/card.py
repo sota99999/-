@@ -65,8 +65,11 @@ def main(argv=None) -> int:
         return 0
 
     x = mlcommon.build_features(sub, feature_columns=bundle["feature_columns"])
-    sub["p"] = model.predict_proba(x)[:, 1]
-    sub["ev"] = sub["p"] * pd.to_numeric(sub.get("odds"), errors="coerce")
+    sub["p_raw"] = model.predict_proba(x)[:, 1]
+    # レース内で合計1に正規化（全頭診断の勝率として読みやすくする）
+    sub = mlcommon.normalize_by_race(sub, prob_col="p_raw", out_col="p")
+    # EVは較正済みの素の確率×オッズ（正規化前）で算出
+    sub["ev"] = sub["p_raw"] * pd.to_numeric(sub.get("odds"), errors="coerce")
 
     for rid, g in sub.groupby("race_id"):
         g = g.sort_values("p", ascending=False).reset_index(drop=True)
