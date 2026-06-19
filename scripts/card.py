@@ -39,6 +39,8 @@ def main(argv=None) -> int:
     p.add_argument("--db", default="keiba.db")
     p.add_argument("--model", default="model_win_noodds.pkl")
     p.add_argument("--show-model", help="複勝率も表示する場合の複勝モデル（例: model_show_noodds.pkl）")
+    p.add_argument("--mark-by", choices=["show", "win"], default="show",
+                   help="印(◎○▲△)の基準: show=複勝率(既定), win=勝率。showは--show-model必須")
     p.add_argument("--race-id", help="このレースだけ")
     p.add_argument("--date", help="この開催日の全レース (YYYY-MM-DD)")
     p.add_argument("--top", type=int, default=0, help="上位何頭まで表示（0=全頭）")
@@ -81,28 +83,28 @@ def main(argv=None) -> int:
     # EVは較正済みの素の確率×オッズ（正規化前）で算出
     sub["ev"] = sub["p_raw"] * pd.to_numeric(sub.get("odds"), errors="coerce")
 
+    # 印の基準（既定: 複勝率。--show-model が無ければ勝率）
+    sort_col = "show_p" if (args.mark_by == "show" and show_bundle) else "p"
+    mark_label = "複勝率" if sort_col == "show_p" else "勝率"
+    has_odds = pd.to_numeric(sub.get("odds"), errors="coerce").notna().any()
     fuku_h = f"{'複勝率':>7}" if show_bundle else ""
+    odds_h = f"{'オッズ':>6}" if has_odds else ""
     for rid, g in sub.groupby("race_id"):
-        g = g.sort_values("p", ascending=False).reset_index(drop=True)
+        g = g.sort_values(sort_col, ascending=False).reset_index(drop=True)
         if args.top:
             g = g.head(args.top)
         print(f"\n=== {rid}  {names.get(rid, '')} ===")
-        print(f"{'印':<2}{'馬番':>3} {'馬名':<13}{'勝率':>6}{fuku_h} {'オッズ':>6} "
-              f"{'Elo':>5} {'近走複勝':>7} {'平均SP':>6} {'脚質':>5}")
+        print(f"{'印':<2}{'馬番':>3} {'馬名':<13}{'勝率':>6}{fuku_h} "
+              f"{'Elo':>5} {'平均SP':>6}{odds_h}")
         for i, r in g.iterrows():
             mark = MARKS[i] if i < len(MARKS) else "  "
-            # 脚質: run_style_prior 0=前/1=後 を言葉に
-            rs = r.get("run_style_prior")
-            kyaku = "  -"
-            if rs is not None and not pd.isna(rs):
-                kyaku = "逃げ" if rs < 0.25 else "先行" if rs < 0.5 else "差し" if rs < 0.75 else "追込"
             fuku = f"{_f(r.get('show_p', float('nan'))*100, '6.1f')}%" if show_bundle else ""
+            odds = f"{_f(r.get('odds'), '6.1f')}" if has_odds else ""
             print(f"{mark:<2}{int(r['horse_number']):>3} {str(r['horse_name'])[:13]:<13}"
-                  f"{_f(r['p']*100, '5.1f')}%{fuku} {_f(r.get('odds'), '6.1f')} "
+                  f"{_f(r['p']*100, '5.1f')}%{fuku} "
                   f"{_f(r.get('elo_before'), '5.0f')} "
-                  f"{_f((r.get('recent3_show_rate') or float('nan'))*100, '6.0f')}% "
-                  f"{_f(r.get('avg_speed_prior'), '6.1f')} {kyaku:>5}")
-    print("\n※ 勝率=1着, 複勝率=3着内 のモデル推定。印は勝率順。馬券は自己責任で。")
+                  f"{_f(r.get('avg_speed_prior'), '6.1f')}{odds}")
+    print(f"\n※ 勝率=1着, 複勝率=3着内 のモデル推定。印は{mark_label}順。馬券は自己責任で。")
     return 0
 
 
