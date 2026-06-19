@@ -77,6 +77,8 @@ def main(argv=None) -> int:
     p.add_argument("--min-runs", type=int, default=1, help="過去出走数の下限（新馬を除外）")
     p.add_argument("--calibrate", default="none", choices=["none", "sigmoid", "isotonic"],
                    help="確率較正の方法（既定none）。sigmoid=Platt, isotonic=単調回帰")
+    p.add_argument("--no-odds", action="store_true",
+                   help="オッズ・人気を特徴量から除外（出馬表段階でオッズ未取得でも予想できるモデル）")
     p.add_argument("--save-model", help="学習後にモデルを保存するパス（例: model.pkl）")
     args = p.parse_args(argv)
 
@@ -90,7 +92,8 @@ def main(argv=None) -> int:
         print(f"[警告] データが少なすぎます（{len(df)}行）。結果は参考程度です。", file=sys.stderr)
 
     train_mask, valid_mask, cut = time_split(df, args.valid_frac)
-    x = mlcommon.build_features(df)
+    extra_drop = ["odds", "popularity"] if args.no_odds else None
+    x = mlcommon.build_features(df, extra_drop=extra_drop)
     feature_columns = list(x.columns)
     y = df[args.target].astype(int)
     x_tr, y_tr = x[train_mask], y[train_mask]

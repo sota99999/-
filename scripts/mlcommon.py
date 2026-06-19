@@ -46,13 +46,17 @@ def load_data(db: str | None, csv: str | None, min_runs: int = 0) -> pd.DataFram
 # -----------------------------------------------------------------------------
 # 特徴量行列
 # -----------------------------------------------------------------------------
-def build_features(df: pd.DataFrame, feature_columns: list[str] | None = None) -> pd.DataFrame:
+def build_features(df: pd.DataFrame, feature_columns: list[str] | None = None,
+                   extra_drop: list[str] | None = None) -> pd.DataFrame:
     """特徴量行列 X を作る。
 
     feature_columns を渡すと、その列順・列集合に reindex して揃える
     （学習時と予測時で one-hot 後の列を一致させるために必須）。
+    extra_drop に列名を渡すと、その列も特徴量から除外する
+    （例: ["odds","popularity"] でオッズ非依存モデルを作る）。
     """
-    x = df.drop(columns=[c for c in DROP_COLS if c in df.columns], errors="ignore")
+    drop = list(DROP_COLS) + (list(extra_drop) if extra_drop else [])
+    x = df.drop(columns=[c for c in drop if c in df.columns], errors="ignore")
     cat = [c for c in CATEGORICAL if c in x.columns]
     x = pd.get_dummies(x, columns=cat, dummy_na=True)
     x = x.apply(pd.to_numeric, errors="coerce")
