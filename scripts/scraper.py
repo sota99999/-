@@ -503,10 +503,16 @@ def ingest_race(conn: sqlite3.Connection, race_id: str) -> dict:
     return parsed
 
 
-def ingest_shutuba(conn: sqlite3.Connection, race_id: str) -> dict:
-    """出馬表（出走前）を取得・パースして DB へ投入する。finish は NULL。"""
+def ingest_shutuba(conn: sqlite3.Connection, race_id: str, race_date: str | None = None) -> dict:
+    """出馬表（出走前）を取得・パースして DB へ投入する。finish は NULL。
+
+    race_date を渡すと、ページから日付が取れない場合の補完に使う
+    （出走前ページは開催日を取りにくいため、クローラの指定日で補う）。
+    """
     html = http_get(SHUTUBA_URL.format(race_id=race_id))
     parsed = parse_shutuba(html, race_id)
+    if race_date and not parsed["race"].get("race_date"):
+        parsed["race"]["race_date"] = race_date
     upsert_race(conn, parsed)
     return parsed
 

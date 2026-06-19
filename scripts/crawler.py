@@ -126,10 +126,12 @@ def main(argv=None) -> int:
             time.sleep(scraper.REQUEST_INTERVAL)
             continue
 
-        ingest = scraper.ingest_shutuba if args.shutuba else scraper.ingest_race
         for rid in target_ids:
             try:
-                parsed = ingest(conn, rid)
+                if args.shutuba:
+                    parsed = scraper.ingest_shutuba(conn, rid, race_date=day.isoformat())
+                else:
+                    parsed = scraper.ingest_race(conn, rid)
                 total_new += 1
                 print(f"   [OK] {rid}: {parsed['race'].get('race_name')} "
                       f"({len(parsed['results'])}頭, {kind})")
