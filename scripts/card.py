@@ -88,7 +88,8 @@ def main(argv=None) -> int:
     mark_label = "複勝率" if sort_col == "show_p" else "勝率"
     has_odds = pd.to_numeric(sub.get("odds"), errors="coerce").notna().any()
     fuku_h = f"{'複勝率':>7}" if show_bundle else ""
-    odds_h = f"{'オッズ':>6}" if has_odds else ""
+    # オッズがある最終結論時のみ オッズ・EV(単勝期待値)を表示
+    odds_h = f"{'オッズ':>6}{'EV':>6}" if has_odds else ""
     for rid, g in sub.groupby("race_id"):
         g = g.sort_values(sort_col, ascending=False).reset_index(drop=True)
         if args.top:
@@ -99,12 +100,13 @@ def main(argv=None) -> int:
         for i, r in g.iterrows():
             mark = MARKS[i] if i < len(MARKS) else "  "
             fuku = f"{_f(r.get('show_p', float('nan'))*100, '6.1f')}%" if show_bundle else ""
-            odds = f"{_f(r.get('odds'), '6.1f')}" if has_odds else ""
+            odds = f"{_f(r.get('odds'), '6.1f')}{_f(r.get('ev'), '6.2f')}" if has_odds else ""
             print(f"{mark:<2}{int(r['horse_number']):>3} {str(r['horse_name'])[:13]:<13}"
                   f"{_f(r['p']*100, '5.1f')}%{fuku} "
                   f"{_f(r.get('elo_before'), '5.0f')} "
                   f"{_f(r.get('avg_speed_prior'), '6.1f')}{odds}")
-    print(f"\n※ 勝率=1着, 複勝率=3着内 のモデル推定。印は{mark_label}順。馬券は自己責任で。")
+    foot = "EV>1.0は期待値プラスの目安。" if has_odds else ""
+    print(f"\n※ 勝率=1着, 複勝率=3着内 のモデル推定。印は{mark_label}順。{foot}馬券は自己責任で。")
     return 0
 
 
