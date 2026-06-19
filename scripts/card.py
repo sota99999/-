@@ -70,10 +70,14 @@ def main(argv=None) -> int:
     sub["p_raw"] = model.predict_proba(x)[:, 1]
     # レース内で合計1に正規化（全頭診断の勝率として読みやすくする）
     sub = mlcommon.normalize_by_race(sub, prob_col="p_raw", out_col="p")
-    # 複勝率（3着以内確率）。較正済みの素の確率をそのまま使う（合計1にはしない）
+    # 複勝率（3着以内確率）。1レースで3頭が3着以内に入るので、レース内で合計3に正規化
     if show_bundle:
         xs = mlcommon.build_features(sub, feature_columns=show_bundle["feature_columns"])
-        sub["show_p"] = show_bundle["model"].predict_proba(xs)[:, 1]
+        sub["show_raw"] = show_bundle["model"].predict_proba(xs)[:, 1]
+        grp = sub.groupby("race_id")["show_raw"]
+        s = grp.transform("sum")
+        cnt = grp.transform("size").clip(upper=3)   # 出走頭数が3未満ならその頭数
+        sub["show_p"] = (sub["show_raw"] / s.where(s > 0, 1.0) * cnt).clip(upper=0.99)
     # EVは較正済みの素の確率×オッズ（正規化前）で算出
     sub["ev"] = sub["p_raw"] * pd.to_numeric(sub.get("odds"), errors="coerce")
 
