@@ -17,11 +17,26 @@ from __future__ import annotations
 import argparse
 import sqlite3
 
+import numpy as np
 import pandas as pd
 
 import mlcommon
 
 MARKS = ["◎", "○", "▲", "△", "△", "×"]   # 上位から印
+
+# 「他馬比較で目立つ強み」を判定する特徴量: (列, ラベル, サンプル数ゲート列, 最小数)
+STRENGTH = [
+    ("elo_before",            "実力",   None,                0),
+    ("avg_speed_prior",       "時計",   None,                0),
+    ("recent3_show_rate",     "近走",   None,                0),
+    ("course_show_rate_prior", "当コース", "course_runs_prior", 2),
+    ("dist_show_rate_prior",  "距離",   "dist_runs_prior",   2),
+    ("dir_show_rate_prior",   "回り",   "dir_runs_prior",    2),
+    ("off_show_rate_prior",   "道悪",   "off_runs_prior",    2),
+    ("jockey_win_rate_prior", "騎手",   "jockey_rides_prior", 10),
+    ("pace_fit",              "展開",   None,                0),
+    ("draw_bias_fit",         "枠",     None,                0),
+]
 
 
 def _f(v, fmt, default="  -"):
@@ -87,26 +102,63 @@ def main(argv=None) -> int:
     sort_col = "show_p" if (args.mark_by == "show" and show_bundle) else "p"
     mark_label = "複勝率" if sort_col == "show_p" else "勝率"
     has_odds = pd.to_numeric(sub.get("odds"), errors="coerce").notna().any()
+
+    # レース内 z スコア（★=突出して高い値 / 〔評価〕の強み判定に使用）
+    z_targets = ["p", "show_p", "ev", "elo_before", "avg_speed_prior"] + [c for c, *_ in STRENGTH]
+    for c in dict.fromkeys(z_targets):
+        if c in sub.columns:
+            gg = sub.groupby("race_id")[c]
+            sd = gg.transform("std").replace(0, np.nan)
+            sub[c + "_z"] = ((sub[c] - gg.transform("mean")) / sd).fillna(0.0)
+
+    def st(r, c):   # 突出値マーク（出走馬中で z>=1.5）
+        return "★" if r.get(c + "_z", 0) >= 1.5 else ""
+
+    def hyoten(r):  # 他馬比較で目立つ強み(◎)/弱み(▼)
+        tags = []
+        for col, label, gate, minr in STRENGTH:
+            if col not in sub.columns or pd.isna(r.get(col)):
+                continue
+            if gate and (r.get(gate) or 0) < minr:
+                continue
+            if r.get(col + "_z", 0) >= 1.0:
+                tags.append((r[col + "_z"], f"{label}◎"))
+        tags.sort(reverse=True)
+        out = [t for _, t in tags[:3]]
+        if (r.get("runs_prior") or 0) >= 3 and (r.get("recent3_show_rate") or 0) == 0:
+            out.append("近走▼")
+        return out
+
     fuku_h = f"{'複勝率':>7}" if show_bundle else ""
-    # オッズがある最終結論時のみ オッズ・EV(単勝期待値)を表示
-    odds_h = f"{'オッズ':>6}{'EV':>6}" if has_odds else ""
+    odds_h = f"{'オッズ':>6}{'EV':>7}" if has_odds else ""   # オッズあり最終結論時のみ
     for rid, g in sub.groupby("race_id"):
         g = g.sort_values(sort_col, ascending=False).reset_index(drop=True)
         if args.top:
             g = g.head(args.top)
         print(f"\n=== {rid}  {names.get(rid, '')} ===")
-        print(f"{'印':<2}{'馬番':>3} {'馬名':<13}{'勝率':>6}{fuku_h} "
-              f"{'Elo':>5} {'平均SP':>6}{odds_h}")
+        print(f"{'印':<2}{'馬番':>3} {'馬名':<12}{'勝率':>7}{fuku_h} "
+              f"{'Elo':>6} {'平均SP':>7}{odds_h}")
         for i, r in g.iterrows():
             mark = MARKS[i] if i < len(MARKS) else "  "
-            fuku = f"{_f(r.get('show_p', float('nan'))*100, '6.1f')}%" if show_bundle else ""
-            odds = f"{_f(r.get('odds'), '6.1f')}{_f(r.get('ev'), '6.2f')}" if has_odds else ""
-            print(f"{mark:<2}{int(r['horse_number']):>3} {str(r['horse_name'])[:13]:<13}"
-                  f"{_f(r['p']*100, '5.1f')}%{fuku} "
-                  f"{_f(r.get('elo_before'), '5.0f')} "
-                  f"{_f(r.get('avg_speed_prior'), '6.1f')}{odds}")
-    foot = "EV>1.0は期待値プラスの目安。" if has_odds else ""
-    print(f"\n※ 勝率=1着, 複勝率=3着内 のモデル推定。印は{mark_label}順。{foot}馬券は自己責任で。")
+            wr = _f(r['p'] * 100, '5.1f') + "%" + st(r, 'p')
+            fuku = (" " + _f(r.get('show_p') * 100, '5.1f') + "%" + st(r, 'show_p')) if show_bundle else ""
+            el = _f(r.get('elo_before'), '5.0f') + st(r, 'elo_before')
+            sp = _f(r.get('avg_speed_prior'), '5.1f') + st(r, 'avg_speed_prior')
+            odds = (" " + _f(r.get('odds'), '5.1f')
+                    + " " + _f(r.get('ev'), '5.2f') + st(r, 'ev')) if has_odds else ""
+            print(f"{mark:<2}{int(r['horse_number']):>3} {str(r['horse_name'])[:12]:<12}"
+                  f"{wr:>7}{fuku} {el:>6} {sp:>7}{odds}")
+        # 〔評価〕上位馬の目立つ強み/弱み
+        lines = []
+        for i, r in g.head(5).iterrows():
+            tags = hyoten(r)
+            if tags:
+                lines.append(f"{MARKS[i] if i < len(MARKS) else ''}{str(r['horse_name'])[:7]}: {'・'.join(tags)}")
+        if lines:
+            print("  〔評価〕 " + " ｜ ".join(lines))
+    foot = "EV>1.0は妙味の目安。" if has_odds else ""
+    print(f"\n※印は{mark_label}順。★=出走馬中で突出して高い値。"
+          f"〔評価〕は他馬比較で目立つ強み◎/弱み▼。{foot}馬券は自己責任で。")
     return 0
 
 
