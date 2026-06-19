@@ -14,8 +14,10 @@
 #
 # 評価比率（能力・適性を重く / 枠・展開・騎手を軽く）:
 #   各馬の「他馬比較での強さ(z)」をグループ別に重み付け合成し、モデル確率を
-#   持ち上げ/抑える。既定で 能力0.45 適性0.45 / 枠0.08 展開0.08 騎手0.08。
-#   --weights "ability=0.5,jockey=0.05" で個別変更、--lean で強さを一括調整。
+#   持ち上げ/抑える。既定で 能力0.22 適性0.22 / 枠0.04 展開0.04 騎手0.04
+#   （能力・適性が枠/展開/騎手の約5.5倍。確率が過度に尖らない水準に調整済み）。
+#   --weights "ability=0.3,jockey=0.02" で個別変更、--lean で強さを一括調整
+#   （例 --lean 2 で効きを倍に、--lean 0 で純モデル）。
 # =============================================================================
 from __future__ import annotations
 
@@ -61,8 +63,9 @@ GROUPS = {
     "jockey":   [("jockey_win_rate_prior", "jockey_rides_prior", 10)],  # ⑤騎手
 }
 # 既定の評価比率（数値が大きいほど予想で重視）。--weights / --lean で変更可
-DEFAULT_WEIGHTS = {"ability": 0.45, "aptitude": 0.45,
-                   "bias": 0.08, "pace": 0.08, "jockey": 0.08}
+# 能力:適性:その他 ≈ 5.5:5.5:1。値の絶対水準は確率の尖り具合（確信の強さ）も決める。
+DEFAULT_WEIGHTS = {"ability": 0.22, "aptitude": 0.22,
+                   "bias": 0.04, "pace": 0.04, "jockey": 0.04}
 GROUP_JP = {"ability": "能力", "aptitude": "適性",
             "bias": "枠", "pace": "展開", "jockey": "騎手"}
 # 〔評価〕タグの重要度を比率に合わせるための 特徴量→グループ 対応
@@ -126,7 +129,7 @@ def main(argv=None) -> int:
     p.add_argument("--date", help="この開催日の全レース (YYYY-MM-DD)")
     p.add_argument("--top", type=int, default=0, help="上位何頭まで表示（0=全頭）")
     p.add_argument("--weights", help='評価比率を上書き。例 '
-                   '"ability=0.45,aptitude=0.45,bias=0.08,pace=0.08,jockey=0.08"。'
+                   '"ability=0.22,aptitude=0.22,bias=0.04,pace=0.04,jockey=0.04"。'
                    '数値が大きいほど重視（既定で能力・適性を重く、枠/展開/騎手を軽く）')
     p.add_argument("--lean", type=float, default=1.0,
                    help="評価比率調整の強さ倍率。0=純モデル（調整なし）, 1=既定, 2=より強く")
