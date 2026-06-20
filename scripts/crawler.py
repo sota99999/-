@@ -54,10 +54,27 @@ def existing_race_ids(conn: sqlite3.Connection) -> set[str]:
     return {row[0] for row in conn.execute("SELECT race_id FROM races")}
 
 
+def races_missing_results(conn: sqlite3.Connection) -> set[str]:
+    """登録済みだが結果が未確定（finish_position が全 NULL）の race_id 集合。
+
+    出馬表だけ登録した（出走前の）レースがここに入る。レース後にもう一度
+    クロールすると、これらは「結果待ち」として再取得の対象になる。
+    """
+    return {row[0] for row in conn.execute(
+        """SELECT race_id FROM results
+           GROUP BY race_id HAVING COUNT(finish_position) = 0""")}
+
+
 def filter_new(conn: sqlite3.Connection, race_ids: list[str]) -> list[str]:
-    """未取得の race_id だけを返す（順序維持）。"""
+    """結果取得が必要な race_id を返す（順序維持）。
+
+    未取得のレースに加えて、出馬表だけ登録済みで結果が未確定のレース
+    （=レースが終わったので結果を取り込みたい）も対象にする。
+    既に結果が確定しているレースだけをスキップする。
+    """
     have = existing_race_ids(conn)
-    return [rid for rid in race_ids if rid not in have]
+    pending = races_missing_results(conn)
+    return [rid for rid in race_ids if rid not in have or rid in pending]
 
 
 # -----------------------------------------------------------------------------
@@ -116,7 +133,7 @@ def main(argv=None) -> int:
         # 出馬表モードはオッズ更新のため取得済みも対象（差分スキップしない）
         target_ids = all_ids if args.shutuba else filter_new(conn, all_ids)
         kind = "出馬表" if args.shutuba else "結果"
-        label = "全" if args.shutuba else "未取得"
+        label = "全" if args.shutuba else "対象"
         print(f"== {prefix}: 開催{len(all_ids)}R / {label}{len(target_ids)}R "
               f"（累計 取込{total_new} 失敗{total_ng}）")
 
