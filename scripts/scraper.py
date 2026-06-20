@@ -496,9 +496,16 @@ def parse_shutuba(html: str, race_id: str) -> dict:
 # 1レース取り込み（取得→パース→投入をまとめたヘルパ）
 # -----------------------------------------------------------------------------
 def ingest_race(conn: sqlite3.Connection, race_id: str) -> dict:
-    """確定済みレースを取得・パースして DB へ投入し、parse 結果を返す。"""
+    """確定済みレースを取得・パースして DB へ投入し、parse 結果を返す。
+
+    結果テーブルが空（=db.netkeiba.com にまだ結果が反映されていない）の場合は
+    既存データを壊さないよう upsert せずに例外を送出する。レース直後はデータ
+    サイトへの反映が遅れることがあるため、時間をおいて再実行すれば取得できる。
+    """
     html = fetch_html(race_id)
     parsed = parse_race(html, race_id)
+    if not parsed["results"]:
+        raise ValueError("結果が未掲載です（db.netkeiba.com 未反映。時間をおいて再実行）")
     upsert_race(conn, parsed)
     return parsed
 
