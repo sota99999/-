@@ -71,9 +71,12 @@ def main(argv=None) -> int:
     p.add_argument("--from", dest="date_from", help="開始日 (YYYY-MM-DD)")
     p.add_argument("--to", dest="date_to", help="終了日 (YYYY-MM-DD)")
     p.add_argument("--mark-by", choices=["show", "win"], default="show",
-                   help="印の基準: show=複勝率(既定), win=勝率")
-    p.add_argument("--weights", help="評価比率の上書き（card と同じ書式）")
-    p.add_argument("--lean", type=float, default=1.0, help="評価比率の強さ倍率")
+                   help="全頭診断(オッズ無)の強さ順の基準: show=複勝率(既定), win=勝率")
+    p.add_argument("--mark-min-runs", type=int, default=2,
+                   help="最終結論で印(妙味馬)を付ける最低出走回数")
+    p.add_argument("--weights", help="能力重視リウェイトの比率（card と同じ書式）")
+    p.add_argument("--lean", type=float, default=0.0,
+                   help="リウェイトの強さ倍率。既定0=較正優先（card と揃える）")
     p.add_argument("--min-ev", type=float, default=1.0,
                    help="EV戦略でこの値以上のEVの馬を単勝買いした場合の成績を出す")
     p.add_argument("--min-runs", type=int, default=3,
@@ -103,24 +106,29 @@ def main(argv=None) -> int:
 
     # card と同一の採点
     sub = card.compute_scores(sub, bundle, show_bundle, weights)
-    sort_col = "show_p" if (args.mark_by == "show" and show_bundle) else "p"
+    strength_col = "show_p" if (args.mark_by == "show" and show_bundle) else "p"
 
     # 実着順を結合（出走取消などで着順が無い馬は NaN）
     sub = sub.merge(actual, on=["race_id", "horse_id"], how="left")
     sub["odds"] = pd.to_numeric(sub.get("odds"), errors="coerce")
 
-    # レース内で印（sort_col 降順）を付与
-    sub["rank"] = sub.groupby("race_id")[sort_col].rank(ascending=False, method="first")
+    # card と同一の印付け（オッズがあれば妙味ベース、無ければ強さ順）
+    marked = []
+    for _, g in sub.groupby("race_id"):
+        vm = pd.to_numeric(g.get("odds"), errors="coerce").notna().any()
+        marked.append(card.assign_marks(g, value_mode=vm, strength_col=strength_col,
+                                        min_runs=args.mark_min_runs))
+    sub = pd.concat(marked, ignore_index=True)
 
     n_races = sub["race_id"].nunique()
     ran = sub[sub["finish"].notna()].copy()   # 実際に出走した馬だけ
 
     print(f"\n=== 予想の振り返り（{args.date_from or '最初'}〜{args.date_to or '最後'}） ===")
-    print(f"対象レース数: {n_races}　／　印は{'複勝率' if sort_col=='show_p' else '勝率'}順"
-          f"　／　評価比率 lean×{args.lean:g}")
+    rwlabel = f"リウェイト×{args.lean:g}" if args.lean else "較正優先(リウェイトなし)"
+    print(f"対象レース数: {n_races}　／　印=妙味ベース　／　{rwlabel}")
     print(f"{'印':<3}{'本数':>5}{'単勝的中':>9}{'複勝的中':>9}{'単回収率':>9}")
-    for i, mk in enumerate(MARKS[:4]):   # ◎○▲△
-        s = _summ(ran[ran["rank"] == i + 1])
+    for mk in ["◎", "○", "▲", "△"]:
+        s = _summ(ran[ran["mark"] == mk])
         if s["n"]:
             print(f"{mk:<3}{s['n']:>5}{s['win']:>8.1f}%{s['place']:>8.1f}%{s['roi']:>8.1f}%")
 
@@ -142,7 +150,7 @@ def main(argv=None) -> int:
           + (f"的中{se['win']:.1f}% 回収率{se['roi']:.1f}%" if se["n"] else "該当なし"))
 
     # ◎の複勝率 較正チェック（予測 vs 実績）
-    honmei = ran[ran["rank"] == 1]
+    honmei = ran[ran["mark"] == "◎"]
     if len(honmei) and "show_p" in honmei:
         print(f"\n較正: ◎の予測複勝率 平均{honmei['show_p'].mean()*100:.1f}% "
               f"→ 実際の複勝率{(honmei['finish']<=3).mean()*100:.1f}%")

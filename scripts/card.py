@@ -118,9 +118,18 @@ def _add_race_z(df: pd.DataFrame, cols) -> None:
 
 
 def compute_scores(sub: pd.DataFrame, bundle: dict, show_bundle, weights: dict) -> pd.DataFrame:
-    """モデル予測＋評価比率調整を行い p_raw/show_raw/p/show_p/ev/tilt を付与して返す。
+    """モデル予測を行い p(勝率)/show_p(複勝率)/ev を付与して返す。
 
-    card 表示と evaluate（的中集計）で完全に同一の採点になるよう共通化したもの。
+    表示する確率は較正済みモデルの素の値（リークなし）を基本にする:
+      - p      : 単勝確率。レース内で合計1に正規化（厳密に1頭が勝つため）。
+      - show_p : 複勝確率。レース内で合計 min(3, 頭数) に正規化（3頭が3着内）。
+                 → モデルが自信過剰なら合計が3を超えるので、3に揃える過程で
+                    自動的に少し引き締められ、較正が改善する。
+      - ev     : 単勝期待値 = 正規化済み単勝確率 × オッズ。
+
+    評価比率(weights)が全て0でない場合のみ、各グループの他馬比較z を合成した
+    tilt で確率を増減させる「能力重視リウェイト」を適用する（既定は無効＝較正優先）。
+    card 表示と evaluate（的中集計）で同一採点になるよう共通化している。
     """
     sub = sub.copy()
     x = mlcommon.build_features(sub, feature_columns=bundle["feature_columns"])
@@ -129,25 +138,72 @@ def compute_scores(sub: pd.DataFrame, bundle: dict, show_bundle, weights: dict) 
         xs = mlcommon.build_features(sub, feature_columns=show_bundle["feature_columns"])
         sub["show_raw"] = show_bundle["model"].predict_proba(xs)[:, 1]
 
-    # 評価比率の調整: 各グループの他馬比較z を weights で合成(tilt)し確率を増減
-    _add_race_z(sub, [col for g in GROUPS.values() for col, *_ in g])
-    tilt = pd.Series(0.0, index=sub.index)
-    for gname, members in GROUPS.items():
-        tilt = tilt + weights.get(gname, 0.0) * _group_z(sub, members)
-    sub["tilt"] = tilt
-    sub["tilt"] = sub["tilt"] - sub.groupby("race_id")["tilt"].transform("mean")
-    adj = np.exp(sub["tilt"].clip(-2.0, 2.0))   # 過度な増幅は ±e^2 でクリップ
+    # 能力重視リウェイト（任意）。weights が全て0なら無効＝較正をそのまま使う
+    use_tilt = any(abs(v) > 1e-9 for v in weights.values())
+    if use_tilt:
+        _add_race_z(sub, [col for g in GROUPS.values() for col, *_ in g])
+        tilt = pd.Series(0.0, index=sub.index)
+        for gname, members in GROUPS.items():
+            tilt = tilt + weights.get(gname, 0.0) * _group_z(sub, members)
+        sub["tilt"] = tilt
+        # レース内で平均0に中心化（全体の確率水準をできるだけ保つ）
+        sub["tilt"] = sub["tilt"] - sub.groupby("race_id")["tilt"].transform("mean")
+        adj = np.exp(sub["tilt"].clip(-2.0, 2.0))
+    else:
+        adj = pd.Series(1.0, index=sub.index)
 
+    # 単勝: 合計1に正規化（較正済みの単勝確率）
     sub["p_adj"] = sub["p_raw"] * adj
     sub = mlcommon.normalize_by_race(sub, prob_col="p_adj", out_col="p")
+    # 複勝: 合計 min(3, 頭数) に正規化（自信過剰を引き締める＝較正改善）
     if show_bundle:
         sub["show_adj"] = sub["show_raw"] * adj
         grp = sub.groupby("race_id")["show_adj"]
         s = grp.transform("sum")
         cnt = grp.transform("size").clip(upper=3)
-        sub["show_p"] = (sub["show_adj"] / s.where(s > 0, 1.0) * cnt).clip(upper=0.99)
-    sub["ev"] = sub["p_adj"] * pd.to_numeric(sub.get("odds"), errors="coerce")
+        sub["show_p"] = (sub["show_adj"] / s.where(s > 0, 1.0) * cnt).clip(upper=0.97)
+    # EVは正規化済み単勝確率×オッズ（市場との乖離＝妙味の指標）
+    sub["ev"] = sub["p"] * pd.to_numeric(sub.get("odds"), errors="coerce")
     return sub
+
+
+SUB_MARKS = ["○", "▲", "△", "△", "△"]   # ◎の次以降（△の数はレースにより可変）
+
+
+def assign_marks(g: pd.DataFrame, value_mode: bool, strength_col: str = "show_p",
+                 min_runs: int = 2) -> pd.DataFrame:
+    """1レース分の出走馬に印(mark列)を付け、印→強さ順に並べ替えて返す。
+
+    value_mode=True（最終結論・オッズあり）:
+      ◎ = 単勝確率(p)が最も高く、かつオッズ以上の評価ができる馬
+          （EV≧1の妙味馬の中から。該当が無ければ単勝確率最上位を本命に）。
+      ○以降 = オッズ以上の評価ができる馬を複勝確率(show_p)順に。
+              妙味のある馬だけに印を付けるので、印の数はレースで変動する。
+    value_mode=False（全頭診断・オッズなし）:
+      単純に強さ順（strength_col 降順）で ◎○▲△△× を付ける。
+    """
+    g = g.copy()
+    g["mark"] = ""
+    if value_mode and "ev" in g.columns:
+        p = pd.to_numeric(g["p"], errors="coerce")
+        ev = pd.to_numeric(g["ev"], errors="coerce")
+        runs = pd.to_numeric(g.get("runs_prior"), errors="coerce").fillna(0)
+        overlay = (ev >= 1.0) & (runs >= min_runs)   # オッズ以上の評価＝妙味
+        cand = g[overlay]
+        hon = (pd.to_numeric(cand["p"], errors="coerce").idxmax()
+               if len(cand) else p.idxmax())
+        g.loc[hon, "mark"] = "◎"
+        rest = g.loc[g.index[overlay].difference([hon])]
+        rest = rest.sort_values(strength_col, ascending=False)
+        for k, idx in enumerate(rest.index[:len(SUB_MARKS)]):
+            g.loc[idx, "mark"] = SUB_MARKS[k]
+        order = {"◎": 0, "○": 1, "▲": 2, "△": 3}
+        g["_o"] = g["mark"].map(lambda m: order.get(m, 9))
+        g = g.sort_values(["_o", strength_col], ascending=[True, False]).drop(columns="_o")
+    else:
+        g = g.sort_values(strength_col, ascending=False).reset_index(drop=True)
+        g["mark"] = [MARKS[i] if i < len(MARKS) else "" for i in range(len(g))]
+    return g
 
 
 def _f(v, fmt, default="  -"):
@@ -166,19 +222,21 @@ def main(argv=None) -> int:
     p.add_argument("--model", default="model_win_noodds.pkl")
     p.add_argument("--show-model", help="複勝率も表示する場合の複勝モデル（例: model_show_noodds.pkl）")
     p.add_argument("--mark-by", choices=["show", "win"], default="show",
-                   help="印(◎○▲△)の基準: show=複勝率(既定), win=勝率。showは--show-model必須")
+                   help="全頭診断(オッズ無)の強さ順の基準: show=複勝率(既定), win=勝率")
     p.add_argument("--race-id", help="このレースだけ")
     p.add_argument("--date", help="この開催日の全レース (YYYY-MM-DD)")
     p.add_argument("--top", type=int, default=0, help="上位何頭まで表示（0=全頭）")
-    p.add_argument("--weights", help='評価比率を上書き。例 '
-                   '"ability=0.22,aptitude=0.22,bias=0.04,pace=0.04,jockey=0.04"。'
-                   '数値が大きいほど重視（既定で能力・適性を重く、枠/展開/騎手を軽く）')
-    p.add_argument("--lean", type=float, default=1.0,
-                   help="評価比率調整の強さ倍率。0=純モデル（調整なし）, 1=既定, 2=より強く")
+    p.add_argument("--mark-min-runs", type=int, default=2,
+                   help="最終結論で印(妙味馬)を付ける最低出走回数（能力未知馬を除外）")
+    p.add_argument("--weights", help='能力重視リウェイトの比率。例 '
+                   '"ability=0.22,aptitude=0.22,bias=0.04,pace=0.04,jockey=0.04"')
+    p.add_argument("--lean", type=float, default=0.0,
+                   help="リウェイトの強さ倍率。既定0=較正優先（リウェイトなし）, 1で適用")
     args = p.parse_args(argv)
 
     weights = parse_weights(args.weights)
     weights = {k: v * args.lean for k, v in weights.items()}
+    use_tilt = any(abs(v) > 1e-9 for v in weights.values())
 
     bundle = mlcommon.load_model(args.model)
     show_bundle = mlcommon.load_model(args.show_model) if args.show_model else None
@@ -201,13 +259,12 @@ def main(argv=None) -> int:
         print("対象レースがありません（出馬表を取り込みましたか? 日付指定は合っていますか?）")
         return 0
 
-    # モデル予測＋評価比率調整（card と evaluate で共通の採点）
+    # モデル予測（card と evaluate で共通の採点）
     sub = compute_scores(sub, bundle, show_bundle, weights)
 
-    # 印の基準（既定: 複勝率。--show-model が無ければ勝率）
-    sort_col = "show_p" if (args.mark_by == "show" and show_bundle) else "p"
-    mark_label = "複勝率" if sort_col == "show_p" else "勝率"
+    # オッズがあれば「最終結論（妙味で印）」、無ければ「全頭診断（強さ順で印）」
     has_odds = pd.to_numeric(sub.get("odds"), errors="coerce").notna().any()
+    strength_col = "show_p" if (args.mark_by == "show" and show_bundle) else "p"
 
     # ★/〔評価〕用の z（調整後の p/show_p/ev と、表示する Elo/SP）
     _add_race_z(sub, ["p", "show_p", "ev", "elo_before", "avg_speed_prior"]
@@ -225,8 +282,8 @@ def main(argv=None) -> int:
                 continue
             z = r.get(col + "_z", 0)
             if z >= 1.0:
-                # 比率の低いグループ（枠/展開/騎手）の強みは見出しに上がりにくくする
-                wf = weights.get(COL2GROUP.get(col, ""), 0.40)
+                # リウェイト時は比率の低いグループの強みを見出しに上げにくくする
+                wf = weights.get(COL2GROUP.get(col, ""), 0.40) if use_tilt else 1.0
                 tags.append((z * wf, z, f"{label}◎"))
         tags.sort(reverse=True)
         out = [t for *_, t in tags[:3]]
@@ -237,14 +294,15 @@ def main(argv=None) -> int:
     fuku_h = f"{'複勝率':>7}" if show_bundle else ""
     odds_h = f"{'オッズ':>6}{'EV':>7}" if has_odds else ""   # オッズあり最終結論時のみ
     for rid, g in sub.groupby("race_id"):
-        g = g.sort_values(sort_col, ascending=False).reset_index(drop=True)
+        g = assign_marks(g, value_mode=has_odds, strength_col=strength_col,
+                         min_runs=args.mark_min_runs).reset_index(drop=True)
         if args.top:
             g = g.head(args.top)
         print(f"\n=== {rid}  {names.get(rid, '')} ===")
         print(f"{'印':<2}{'馬番':>3} {'馬名':<12}{'勝率':>7}{fuku_h} "
               f"{'Elo':>6} {'平均SP':>7}{odds_h}")
-        for i, r in g.iterrows():
-            mark = MARKS[i] if i < len(MARKS) else "  "
+        for _, r in g.iterrows():
+            mark = r["mark"] or "  "
             wr = _f(r['p'] * 100, '5.1f') + "%" + st(r, 'p')
             fuku = (" " + _f(r.get('show_p') * 100, '5.1f') + "%" + st(r, 'show_p')) if show_bundle else ""
             el = _f(r.get('elo_before'), '5.0f') + st(r, 'elo_before')
@@ -253,24 +311,25 @@ def main(argv=None) -> int:
                     + " " + _f(r.get('ev'), '5.2f') + st(r, 'ev')) if has_odds else ""
             print(f"{mark:<2}{int(r['horse_number']):>3} {str(r['horse_name'])[:12]:<12}"
                   f"{wr:>7}{fuku} {el:>6} {sp:>7}{odds}")
-        # 〔評価〕上位馬の目立つ強み/弱み
+        # 〔評価〕印を付けた馬の目立つ強み/弱み
         lines = []
-        for i, r in g.head(5).iterrows():
+        for _, r in g[g["mark"] != ""].head(5).iterrows():
             tags = hyoten(r)
             if tags:
-                lines.append(f"{MARKS[i] if i < len(MARKS) else ''}{str(r['horse_name'])[:7]}: {'・'.join(tags)}")
+                lines.append(f"{r['mark']}{str(r['horse_name'])[:7]}: {'・'.join(tags)}")
         if lines:
             print("  〔評価〕 " + " ｜ ".join(lines))
-    foot = "EV>1.0は妙味の目安。" if has_odds else ""
-    base = parse_weights(args.weights)   # lean を掛ける前の比率を表示
-    wtxt = "・".join(f"{GROUP_JP[g]}{base[g]:.2f}" for g in GROUPS)
-    if args.lean == 0:
-        wtxt = "調整なし（純モデル）"
-    elif args.lean != 1.0:
-        wtxt += f"（×{args.lean:g}）"
-    print(f"\n※評価比率 {wtxt}（数値が大きいほど予想で重視）。")
-    print(f"※印は{mark_label}順。★=出走馬中で突出して高い値。"
-          f"〔評価〕は他馬比較で目立つ強み◎/弱み▼。{foot}馬券は自己責任で。")
+
+    if has_odds:
+        mark_rule = ("印=妙味（オッズ以上の評価）。◎は単勝確率が最も高い妙味馬、"
+                     "○▲△は複勝確率が高い妙味馬（妙味馬だけに印・頭数は変動）。EV≧1が妙味の目安")
+    else:
+        mark_rule = f"印は馬の強さ（{'複勝率' if strength_col=='show_p' else '勝率'}）順"
+    rw = (f"能力重視リウェイト 適用（×{args.lean:g}）" if use_tilt
+          else "リウェイトなし＝較正優先（勝率・複勝率はモデル較正値）")
+    print(f"\n※{mark_rule}。★=出走馬中で突出して高い値。"
+          f"〔評価〕は他馬比較で目立つ強み◎/弱み▼。")
+    print(f"※{rw}。馬券は自己責任で。")
     return 0
 
 
