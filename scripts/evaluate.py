@@ -1,0 +1,148 @@
+#!/usr/bin/env python3
+# =============================================================================
+# 予想の的中率・回収率を集計する（バックテスト/振り返り）
+#
+# card.py と全く同じ採点（compute_scores）で各レースの印(◎○▲△)を再現し、
+# 実際の着順と突き合わせて、印ごとの単勝的中率・複勝的中率・単勝回収率を出す。
+# 結果が確定したレースだけを対象にする（finish_position が入っているレース）。
+#
+# ※ 特徴量はすべてレース前情報（elo_before 等は当該レース直前値）なので、
+#    結果を取り込んだ後に集計しても予想内容は変わらない（リークしない）。
+#
+# 使い方:
+#   python scripts/evaluate.py --db keiba.db \
+#       --model model_win_noodds.pkl --show-model model_show_noodds.pkl
+#   # 期間を絞る
+#   python scripts/evaluate.py --db keiba.db --from 2026-06-20 --to 2026-06-21 \
+#       --model model_win_noodds.pkl --show-model model_show_noodds.pkl
+#
+# 注意: 回収率は単勝のみ（複勝・馬連等の払戻データは未取得のため複勝は的中率のみ）。
+#       オッズは結果ページの最終オッズを使用（実際の購入時とは多少ずれ得る）。
+# =============================================================================
+from __future__ import annotations
+
+import argparse
+import sqlite3
+
+import numpy as np
+import pandas as pd
+
+import mlcommon
+import card
+
+MARKS = card.MARKS   # ["◎","○","▲","△","△","×"]
+
+
+def _resulted_race_ids(conn, date_from=None, date_to=None) -> list[str]:
+    """結果が確定した（finish_position が1件以上ある）レースID。期間で絞れる。"""
+    q = ["""SELECT ra.race_id FROM races ra
+            WHERE ra.race_id IN (SELECT race_id FROM results
+                                 GROUP BY race_id HAVING COUNT(finish_position) > 0)"""]
+    params: list = []
+    if date_from:
+        q.append("AND ra.race_date >= ?"); params.append(date_from)
+    if date_to:
+        q.append("AND ra.race_date <= ?"); params.append(date_to)
+    q.append("ORDER BY ra.race_id")
+    return [r[0] for r in conn.execute(" ".join(q), params)]
+
+
+def _summ(bets: pd.DataFrame) -> dict:
+    """賭け対象の DataFrame（finish, odds 列あり）から的中率・回収率を計算。"""
+    n = len(bets)
+    if n == 0:
+        return {"n": 0, "win": 0.0, "place": 0.0, "roi": 0.0}
+    win = bets["finish"] == 1
+    place = bets["finish"] <= 3
+    payout = bets.loc[win, "odds"].fillna(0).sum() * 100   # 100円賭けの払戻合計
+    return {
+        "n": n,
+        "win": win.mean() * 100,
+        "place": place.mean() * 100,
+        "roi": payout / (100 * n) * 100,
+    }
+
+
+def main(argv=None) -> int:
+    p = argparse.ArgumentParser(description="予想の的中率・回収率を集計")
+    p.add_argument("--db", default="keiba.db")
+    p.add_argument("--model", default="model_win_noodds.pkl")
+    p.add_argument("--show-model", help="複勝モデル（印を複勝率で付ける場合）")
+    p.add_argument("--from", dest="date_from", help="開始日 (YYYY-MM-DD)")
+    p.add_argument("--to", dest="date_to", help="終了日 (YYYY-MM-DD)")
+    p.add_argument("--mark-by", choices=["show", "win"], default="show",
+                   help="印の基準: show=複勝率(既定), win=勝率")
+    p.add_argument("--weights", help="評価比率の上書き（card と同じ書式）")
+    p.add_argument("--lean", type=float, default=1.0, help="評価比率の強さ倍率")
+    p.add_argument("--min-ev", type=float, default=1.0,
+                   help="EV戦略でこの値以上のEVの馬を単勝買いした場合の成績を出す")
+    args = p.parse_args(argv)
+
+    weights = card.parse_weights(args.weights)
+    weights = {k: v * args.lean for k, v in weights.items()}
+
+    bundle = mlcommon.load_model(args.model)
+    show_bundle = mlcommon.load_model(args.show_model) if args.show_model else None
+    df = mlcommon.load_data(args.db, None)
+
+    conn = sqlite3.connect(args.db)
+    ids = _resulted_race_ids(conn, args.date_from, args.date_to)
+    actual = pd.read_sql_query(
+        "SELECT race_id, horse_id, finish_position AS finish FROM results "
+        "WHERE finish_position IS NOT NULL", conn)
+    conn.close()
+
+    sub = df[df["race_id"].isin(ids)].copy()
+    if sub.empty:
+        print("対象レースがありません（結果が取り込まれていますか? 期間指定は合っていますか?）")
+        return 0
+
+    # card と同一の採点
+    sub = card.compute_scores(sub, bundle, show_bundle, weights)
+    sort_col = "show_p" if (args.mark_by == "show" and show_bundle) else "p"
+
+    # 実着順を結合（出走取消などで着順が無い馬は NaN）
+    sub = sub.merge(actual, on=["race_id", "horse_id"], how="left")
+    sub["odds"] = pd.to_numeric(sub.get("odds"), errors="coerce")
+
+    # レース内で印（sort_col 降順）を付与
+    sub["rank"] = sub.groupby("race_id")[sort_col].rank(ascending=False, method="first")
+
+    n_races = sub["race_id"].nunique()
+    ran = sub[sub["finish"].notna()].copy()   # 実際に出走した馬だけ
+
+    print(f"\n=== 予想の振り返り（{args.date_from or '最初'}〜{args.date_to or '最後'}） ===")
+    print(f"対象レース数: {n_races}　／　印は{'複勝率' if sort_col=='show_p' else '勝率'}順"
+          f"　／　評価比率 lean×{args.lean:g}")
+    print(f"{'印':<3}{'本数':>5}{'単勝的中':>9}{'複勝的中':>9}{'単回収率':>9}")
+    for i, mk in enumerate(MARKS[:4]):   # ◎○▲△
+        s = _summ(ran[ran["rank"] == i + 1])
+        if s["n"]:
+            print(f"{mk:<3}{s['n']:>5}{s['win']:>8.1f}%{s['place']:>8.1f}%{s['roi']:>8.1f}%")
+
+    # 参考: 1番人気（市場の本命）の成績
+    fav = ran[pd.to_numeric(ran.get("popularity"), errors="coerce") == 1]
+    sf = _summ(fav)
+    if sf["n"]:
+        print(f"\n参考 1番人気: {sf['n']}本 単勝的中{sf['win']:.1f}% "
+              f"複勝的中{sf['place']:.1f}% 単回収率{sf['roi']:.1f}%")
+
+    # EV戦略: EV>=min-ev の馬を単勝で全部買った場合
+    evbets = ran[pd.to_numeric(ran.get("ev"), errors="coerce") >= args.min_ev]
+    se = _summ(evbets)
+    print(f"EV≧{args.min_ev:g} 単勝買い: {se['n']}本 "
+          + (f"的中{se['win']:.1f}% 回収率{se['roi']:.1f}%" if se["n"] else "該当なし"))
+
+    # ◎の複勝率 較正チェック（予測 vs 実績）
+    honmei = ran[ran["rank"] == 1]
+    if len(honmei) and "show_p" in honmei:
+        print(f"\n較正: ◎の予測複勝率 平均{honmei['show_p'].mean()*100:.1f}% "
+              f"→ 実際の複勝率{(honmei['finish']<=3).mean()*100:.1f}%")
+
+    print("\n※単回収率100%超で利益。複勝・馬連等の払戻は未取得のため複勝は的中率のみ。"
+          "オッズは最終オッズ基準。")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

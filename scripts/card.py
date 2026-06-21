@@ -108,6 +108,48 @@ def _group_z(df: pd.DataFrame, members) -> pd.Series:
     return pd.concat(parts, axis=1).mean(axis=1, skipna=True).fillna(0.0)
 
 
+def _add_race_z(df: pd.DataFrame, cols) -> None:
+    """レース内 z スコア列(col+'_z')を df に追加（既存はスキップ・in place）。"""
+    for c in dict.fromkeys(cols):
+        if c in df.columns and (c + "_z") not in df.columns:
+            gg = df.groupby("race_id")[c]
+            sd = gg.transform("std").replace(0, np.nan)
+            df[c + "_z"] = ((df[c] - gg.transform("mean")) / sd).fillna(0.0)
+
+
+def compute_scores(sub: pd.DataFrame, bundle: dict, show_bundle, weights: dict) -> pd.DataFrame:
+    """モデル予測＋評価比率調整を行い p_raw/show_raw/p/show_p/ev/tilt を付与して返す。
+
+    card 表示と evaluate（的中集計）で完全に同一の採点になるよう共通化したもの。
+    """
+    sub = sub.copy()
+    x = mlcommon.build_features(sub, feature_columns=bundle["feature_columns"])
+    sub["p_raw"] = bundle["model"].predict_proba(x)[:, 1]
+    if show_bundle:
+        xs = mlcommon.build_features(sub, feature_columns=show_bundle["feature_columns"])
+        sub["show_raw"] = show_bundle["model"].predict_proba(xs)[:, 1]
+
+    # 評価比率の調整: 各グループの他馬比較z を weights で合成(tilt)し確率を増減
+    _add_race_z(sub, [col for g in GROUPS.values() for col, *_ in g])
+    tilt = pd.Series(0.0, index=sub.index)
+    for gname, members in GROUPS.items():
+        tilt = tilt + weights.get(gname, 0.0) * _group_z(sub, members)
+    sub["tilt"] = tilt
+    sub["tilt"] = sub["tilt"] - sub.groupby("race_id")["tilt"].transform("mean")
+    adj = np.exp(sub["tilt"].clip(-2.0, 2.0))   # 過度な増幅は ±e^2 でクリップ
+
+    sub["p_adj"] = sub["p_raw"] * adj
+    sub = mlcommon.normalize_by_race(sub, prob_col="p_adj", out_col="p")
+    if show_bundle:
+        sub["show_adj"] = sub["show_raw"] * adj
+        grp = sub.groupby("race_id")["show_adj"]
+        s = grp.transform("sum")
+        cnt = grp.transform("size").clip(upper=3)
+        sub["show_p"] = (sub["show_adj"] / s.where(s > 0, 1.0) * cnt).clip(upper=0.99)
+    sub["ev"] = sub["p_adj"] * pd.to_numeric(sub.get("odds"), errors="coerce")
+    return sub
+
+
 def _f(v, fmt, default="  -"):
     """NaN/None を安全に整形。"""
     try:
@@ -139,7 +181,6 @@ def main(argv=None) -> int:
     weights = {k: v * args.lean for k, v in weights.items()}
 
     bundle = mlcommon.load_model(args.model)
-    model = bundle["model"]
     show_bundle = mlcommon.load_model(args.show_model) if args.show_model else None
     df = mlcommon.load_data(args.db, None)
 
@@ -160,45 +201,8 @@ def main(argv=None) -> int:
         print("対象レースがありません（出馬表を取り込みましたか? 日付指定は合っていますか?）")
         return 0
 
-    # レース内 z スコアを付与するヘルパ（★/〔評価〕/比率調整に共用）
-    def add_z(cols):
-        for c in dict.fromkeys(cols):
-            if c in sub.columns and (c + "_z") not in sub.columns:
-                gg = sub.groupby("race_id")[c]
-                sd = gg.transform("std").replace(0, np.nan)
-                sub[c + "_z"] = ((sub[c] - gg.transform("mean")) / sd).fillna(0.0)
-
-    # モデルの素の確率（単勝・複勝）
-    x = mlcommon.build_features(sub, feature_columns=bundle["feature_columns"])
-    sub["p_raw"] = model.predict_proba(x)[:, 1]
-    if show_bundle:
-        xs = mlcommon.build_features(sub, feature_columns=show_bundle["feature_columns"])
-        sub["show_raw"] = show_bundle["model"].predict_proba(xs)[:, 1]
-
-    # === 評価比率の調整（能力・適性を重く、枠/展開/騎手を軽く） ===
-    #   各グループの「他馬比較での強さ(z)」を weights で重み付けして合成(tilt)し、
-    #   モデル確率を相対的に持ち上げ/抑える。weights を変えれば比率を再調整できる。
-    add_z([col for g in GROUPS.values() for col, *_ in g])
-    tilt = pd.Series(0.0, index=sub.index)
-    for gname, members in GROUPS.items():
-        tilt = tilt + weights.get(gname, 0.0) * _group_z(sub, members)
-    sub["tilt"] = tilt
-    # レース内で平均0に中心化 → 全体の確率水準（較正）をできるだけ保つ
-    sub["tilt"] = sub["tilt"] - sub.groupby("race_id")["tilt"].transform("mean")
-    adj = np.exp(sub["tilt"].clip(-2.0, 2.0))   # 過度な増幅は ±e^2 でクリップ
-
-    # 単勝: 調整後をレース内で合計1に正規化（読みやすい勝率に）
-    sub["p_adj"] = sub["p_raw"] * adj
-    sub = mlcommon.normalize_by_race(sub, prob_col="p_adj", out_col="p")
-    # 複勝率: 調整後をレース内で合計3（出走3頭未満ならその頭数）に正規化
-    if show_bundle:
-        sub["show_adj"] = sub["show_raw"] * adj
-        grp = sub.groupby("race_id")["show_adj"]
-        s = grp.transform("sum")
-        cnt = grp.transform("size").clip(upper=3)
-        sub["show_p"] = (sub["show_adj"] / s.where(s > 0, 1.0) * cnt).clip(upper=0.99)
-    # EVは調整後の素の確率×オッズ（正規化前）で算出
-    sub["ev"] = sub["p_adj"] * pd.to_numeric(sub.get("odds"), errors="coerce")
+    # モデル予測＋評価比率調整（card と evaluate で共通の採点）
+    sub = compute_scores(sub, bundle, show_bundle, weights)
 
     # 印の基準（既定: 複勝率。--show-model が無ければ勝率）
     sort_col = "show_p" if (args.mark_by == "show" and show_bundle) else "p"
@@ -206,7 +210,8 @@ def main(argv=None) -> int:
     has_odds = pd.to_numeric(sub.get("odds"), errors="coerce").notna().any()
 
     # ★/〔評価〕用の z（調整後の p/show_p/ev と、表示する Elo/SP）
-    add_z(["p", "show_p", "ev", "elo_before", "avg_speed_prior"] + [c for c, *_ in STRENGTH])
+    _add_race_z(sub, ["p", "show_p", "ev", "elo_before", "avg_speed_prior"]
+                + [c for c, *_ in STRENGTH])
 
     def st(r, c):   # 突出値マーク（出走馬中で z>=1.5）
         return "★" if r.get(c + "_z", 0) >= 1.5 else ""
