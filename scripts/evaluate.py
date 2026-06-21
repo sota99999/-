@@ -76,6 +76,10 @@ def main(argv=None) -> int:
     p.add_argument("--lean", type=float, default=1.0, help="評価比率の強さ倍率")
     p.add_argument("--min-ev", type=float, default=1.0,
                    help="EV戦略でこの値以上のEVの馬を単勝買いした場合の成績を出す")
+    p.add_argument("--min-runs", type=int, default=3,
+                   help="EV戦略で対象にする最低出走回数（新馬・能力未知馬を除外）")
+    p.add_argument("--max-odds", type=float, default=30.0,
+                   help="EV戦略で対象にする単勝オッズ上限（大穴の過大評価を除外）")
     args = p.parse_args(argv)
 
     weights = card.parse_weights(args.weights)
@@ -127,10 +131,14 @@ def main(argv=None) -> int:
         print(f"\n参考 1番人気: {sf['n']}本 単勝的中{sf['win']:.1f}% "
               f"複勝的中{sf['place']:.1f}% 単回収率{sf['roi']:.1f}%")
 
-    # EV戦略: EV>=min-ev の馬を単勝で全部買った場合
-    evbets = ran[pd.to_numeric(ran.get("ev"), errors="coerce") >= args.min_ev]
-    se = _summ(evbets)
-    print(f"EV≧{args.min_ev:g} 単勝買い: {se['n']}本 "
+    # EV戦略: EV>=min-ev の馬を単勝で買う。ただし「出走歴が一定以上」かつ
+    #   「オッズ上限以下」に絞る（EV>1の正体がElo初期値の新馬・大穴に偏るため）。
+    runs = pd.to_numeric(ran.get("runs_prior"), errors="coerce").fillna(0)
+    evmask = (pd.to_numeric(ran.get("ev"), errors="coerce") >= args.min_ev) \
+        & (runs >= args.min_runs) & (ran["odds"] <= args.max_odds)
+    se = _summ(ran[evmask])
+    print(f"EV≧{args.min_ev:g} 単勝買い（{args.min_runs}走以上・{args.max_odds:g}倍以下）: "
+          f"{se['n']}本 "
           + (f"的中{se['win']:.1f}% 回収率{se['roi']:.1f}%" if se["n"] else "該当なし"))
 
     # ◎の複勝率 較正チェック（予測 vs 実績）
