@@ -32,6 +32,7 @@ from bs4 import BeautifulSoup
 
 BASE_URL = "https://db.netkeiba.com/race/{race_id}/"
 SHUTUBA_URL = "https://race.netkeiba.com/race/shutuba.html?race_id={race_id}"  # 出馬表
+RESULT_URL = "https://race.netkeiba.com/race/result.html?race_id={race_id}"    # 速報結果
 # 単勝・複勝オッズのJSON API（type=1）。出馬表ページのJS描画オッズの代わりに使う
 ODDS_API = ("https://race.netkeiba.com/api/api_get_jra_odds.html"
             "?race_id={race_id}&type=1&action=update")
@@ -331,12 +332,17 @@ def upsert_race(conn: sqlite3.Connection, parsed: dict) -> None:
            VALUES (:race_id, :race_date, :venue_id, :race_number, :race_name, :grade,
                    :surface, :distance, :direction, :weather, :track_condition, :field_size)
            ON CONFLICT(race_id) DO UPDATE SET
-               race_date=excluded.race_date, venue_id=excluded.venue_id,
-               race_number=excluded.race_number, race_name=excluded.race_name,
-               grade=excluded.grade, surface=excluded.surface,
-               distance=excluded.distance, direction=excluded.direction,
-               weather=excluded.weather, track_condition=excluded.track_condition,
-               field_size=excluded.field_size""",
+               race_date=COALESCE(excluded.race_date, races.race_date),
+               venue_id=COALESCE(excluded.venue_id, races.venue_id),
+               race_number=COALESCE(excluded.race_number, races.race_number),
+               race_name=COALESCE(excluded.race_name, races.race_name),
+               grade=COALESCE(excluded.grade, races.grade),
+               surface=COALESCE(excluded.surface, races.surface),
+               distance=COALESCE(excluded.distance, races.distance),
+               direction=COALESCE(excluded.direction, races.direction),
+               weather=COALESCE(excluded.weather, races.weather),
+               track_condition=COALESCE(excluded.track_condition, races.track_condition),
+               field_size=COALESCE(excluded.field_size, races.field_size)""",
         {**{k: race.get(k) for k in
             ("race_id", "race_date", "venue_id", "race_number", "race_name", "grade",
              "surface", "distance", "direction", "weather", "track_condition", "field_size")}},
@@ -353,8 +359,12 @@ def upsert_race(conn: sqlite3.Connection, parsed: dict) -> None:
                        :finish_position, :finish_status, :time_seconds, :margin, :passing, :last_3f,
                        :weight_carried, :horse_weight, :weight_change, :odds, :popularity)
                ON CONFLICT(race_id, horse_number) DO UPDATE SET
-                   finish_position=excluded.finish_position, time_seconds=excluded.time_seconds,
-                   last_3f=excluded.last_3f, odds=excluded.odds, popularity=excluded.popularity""",
+                   finish_position=excluded.finish_position, finish_status=excluded.finish_status,
+                   time_seconds=excluded.time_seconds, margin=excluded.margin,
+                   passing=excluded.passing, last_3f=excluded.last_3f,
+                   horse_weight=COALESCE(excluded.horse_weight, results.horse_weight),
+                   weight_change=COALESCE(excluded.weight_change, results.weight_change),
+                   odds=excluded.odds, popularity=excluded.popularity""",
             {k: r.get(k) for k in
              ("race_id", "horse_id", "jockey_id", "trainer_id", "post_position", "horse_number",
               "finish_position", "finish_status", "time_seconds", "margin", "passing", "last_3f",
@@ -493,19 +503,165 @@ def parse_shutuba(html: str, race_id: str) -> dict:
 
 
 # -----------------------------------------------------------------------------
+# 速報結果（race.netkeiba.com）のパース
+#   db.netkeiba.com（アーカイブ側）は反映が遅いため、レース直後に確定する
+#   速報サイトの結果ページから着順を取得するフォールバック経路。
+# -----------------------------------------------------------------------------
+def _result_header_index(header_cells: list[str]):
+    """結果テーブルのヘッダ文字列 → 列インデックス（部分一致で解決）。"""
+    def find(*keys):
+        for i, h in enumerate(header_cells):
+            if any(k in h for k in keys):
+                return i
+        return None
+    return {
+        "着順": find("着順", "着 順"),
+        "枠": find("枠"),
+        "馬番": find("馬番"),
+        "馬名": find("馬名"),
+        "性齢": find("性齢"),
+        "斤量": find("斤量"),
+        "騎手": find("騎手"),
+        "タイム": find("タイム"),
+        "着差": find("着差"),
+        "人気": find("人気"),
+        "単勝": find("単勝", "オッズ"),
+        "上り": find("後3F", "上り", "上がり"),
+        "通過": find("通過"),
+        "厩舎": find("厩舎", "調教師"),
+        "馬体重": find("馬体重"),
+    }
+
+
+def parse_result_live(html: str, race_id: str) -> dict:
+    """race.netkeiba.com の結果ページから race / results を抽出する。
+
+    着順が1つも無い（=まだ確定前）場合は results を空で返す。払戻は
+    db.netkeiba 反映後にまとめて取得する想定で、ここでは扱わない。
+    """
+    soup = BeautifulSoup(html, "lxml")
+    race: dict = {"race_id": race_id, "venue_id": race_id[4:6],
+                  "race_number": _to_int(race_id[-2:])}
+
+    name_el = soup.select_one(".RaceName, .RaceList_Item02 .RaceName, h1")
+    race["race_name"] = name_el.get_text(strip=True) if name_el else None
+
+    cond = soup.select_one(".RaceData01")
+    cond_text = cond.get_text(" ", strip=True) if cond else ""
+    if "芝" in cond_text:
+        race["surface"] = "芝"
+    elif "ダ" in cond_text:
+        race["surface"] = "ダート"
+    elif "障" in cond_text:
+        race["surface"] = "障害"
+    else:
+        race["surface"] = None
+    m = re.search(r"(\d{3,4})m", cond_text)
+    race["distance"] = _to_int(m.group(1)) if m else None
+    if "右" in cond_text:
+        race["direction"] = "右"
+    elif "左" in cond_text:
+        race["direction"] = "左"
+    elif "直" in cond_text:
+        race["direction"] = "直線"
+    else:
+        race["direction"] = None
+    m = re.search(r"天候\s*[:：]\s*(\S+)", cond_text)
+    race["weather"] = m.group(1) if m else None
+    m = re.search(r"馬場\s*[:：]\s*(良|稍重|重|不良)", cond_text)
+    race["track_condition"] = m.group(1) if m else None
+
+    # 開催日（ページ内の "YYYY年M月D日"。取れなければ None＝既存値を保持）
+    m = re.search(r"(\d{4})年(\d{1,2})月(\d{1,2})日", html)
+    race["race_date"] = (f"{m.group(1)}-{int(m.group(2)):02d}-{int(m.group(3)):02d}"
+                         if m else None)
+    m = re.search(r"(G[ⅠⅡⅢ123])", (race.get("race_name") or "") + " " + cond_text)
+    race["grade"] = m.group(1) if m else None
+
+    # ---- 結果テーブル ----
+    table = soup.select_one(
+        "table.RaceTable01, table.RaceCommon_Table, div.ResultTableWrap table")
+    results = []
+    if table:
+        rows_tr = table.select("tr")
+        header_cells = [c.get_text(strip=True) for c in rows_tr[0].find_all(["th", "td"])]
+        idx = _result_header_index(header_cells)
+
+        def cell(cells, key):
+            i = idx.get(key)
+            return cells[i] if i is not None and i < len(cells) else None
+
+        for tr in rows_tr[1:]:
+            cells = tr.find_all("td")
+            if not cells:
+                continue
+            row = {"race_id": race_id}
+            fin = (cell(cells, "着順") or _blank()).get_text(strip=True)
+            row["finish_position"] = _to_int(fin)
+            row["finish_status"] = (fin or None) if row["finish_position"] is None else None
+            row["post_position"] = _to_int((cell(cells, "枠") or _blank()).get_text(strip=True))
+            row["horse_number"] = _to_int((cell(cells, "馬番") or _blank()).get_text(strip=True))
+            if row["horse_number"] is None:
+                continue
+            hc = cell(cells, "馬名")
+            row["horse_id"] = _id_from_href(hc, "horse")
+            row["horse_name"] = hc.get_text(strip=True) if hc else None
+            sexage = (cell(cells, "性齢") or _blank()).get_text(strip=True)
+            row["sex"] = sexage[0] if sexage else None
+            jc = cell(cells, "騎手")
+            row["jockey_id"] = _id_from_href(jc, "jockey")
+            row["jockey_name"] = jc.get_text(strip=True) if jc else None
+            tc = cell(cells, "厩舎")
+            row["trainer_id"] = _id_from_href(tc, "trainer")
+            row["trainer_name"] = tc.get_text(strip=True) if tc else None
+            row["weight_carried"] = _to_float((cell(cells, "斤量") or _blank()).get_text(strip=True))
+            row["time_seconds"] = _time_to_seconds((cell(cells, "タイム") or _blank()).get_text(strip=True))
+            row["margin"] = (cell(cells, "着差") or _blank()).get_text(strip=True) or None
+            row["passing"] = (cell(cells, "通過") or _blank()).get_text(strip=True) or None
+            row["last_3f"] = _to_float((cell(cells, "上り") or _blank()).get_text(strip=True))
+            row["odds"] = _to_float((cell(cells, "単勝") or _blank()).get_text(strip=True))
+            row["popularity"] = _to_int((cell(cells, "人気") or _blank()).get_text(strip=True))
+            bw = (cell(cells, "馬体重") or _blank()).get_text(strip=True)
+            mbw = re.match(r"(\d+)\(([-+]?\d+)\)", bw)
+            if mbw:
+                row["horse_weight"] = _to_int(mbw.group(1))
+                row["weight_change"] = _to_int(mbw.group(2))
+            else:
+                row["horse_weight"] = _to_int(bw) if bw.isdigit() else None
+                row["weight_change"] = None
+            results.append(row)
+
+    race["field_size"] = len(results) or None
+    return {"race": race, "results": results, "payouts": []}
+
+
+def _has_finish(parsed: dict) -> bool:
+    """着順が1つでも確定しているか（=結果が取得できたか）。"""
+    return any(r.get("finish_position") is not None for r in parsed.get("results", []))
+
+
+# -----------------------------------------------------------------------------
 # 1レース取り込み（取得→パース→投入をまとめたヘルパ）
 # -----------------------------------------------------------------------------
 def ingest_race(conn: sqlite3.Connection, race_id: str) -> dict:
     """確定済みレースを取得・パースして DB へ投入し、parse 結果を返す。
 
-    結果テーブルが空（=db.netkeiba.com にまだ結果が反映されていない）の場合は
-    既存データを壊さないよう upsert せずに例外を送出する。レース直後はデータ
-    サイトへの反映が遅れることがあるため、時間をおいて再実行すれば取得できる。
+    まず db.netkeiba.com（アーカイブ）から取得し、未反映なら race.netkeiba.com
+    （速報）の結果ページにフォールバックする。どちらも着順が無い場合は既存
+    データを壊さないよう upsert せずに例外を送出する（時間をおいて再実行）。
     """
-    html = fetch_html(race_id)
-    parsed = parse_race(html, race_id)
-    if not parsed["results"]:
-        raise ValueError("結果が未掲載です（db.netkeiba.com 未反映。時間をおいて再実行）")
+    parsed = parse_race(fetch_html(race_id), race_id)
+    if not _has_finish(parsed):
+        # db.netkeiba 未反映 → 速報サイトの結果ページから着順を取得
+        try:
+            live_html = http_get(RESULT_URL.format(race_id=race_id), encoding="utf-8")
+            live = parse_result_live(live_html, race_id)
+            if _has_finish(live):
+                parsed = live
+        except Exception:  # noqa: BLE001  速報側の失敗は致命的でない
+            pass
+    if not _has_finish(parsed):
+        raise ValueError("結果が未掲載です（db.netkeiba/race.netkeiba とも未反映。時間をおいて再実行）")
     upsert_race(conn, parsed)
     return parsed
 
