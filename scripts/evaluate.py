@@ -108,7 +108,7 @@ def main(argv=None) -> int:
     conn = sqlite3.connect(args.db)
     ids = _resulted_race_ids(conn, args.date_from, args.date_to)
     actual = pd.read_sql_query(
-        "SELECT race_id, horse_id, horse_number, finish_position AS finish FROM results "
+        "SELECT race_id, horse_id, finish_position AS finish FROM results "
         "WHERE finish_position IS NOT NULL", conn)
     # 複勝の確定払戻（combination=馬番, payout=円/100円）を (race_id, 馬番) で引けるように
     place_pay = pd.read_sql_query(
@@ -131,8 +131,11 @@ def main(argv=None) -> int:
     sub = sub.merge(actual, on=["race_id", "horse_id"], how="left")
     sub["odds"] = pd.to_numeric(sub.get("odds"), errors="coerce")
     # 複勝払戻を (race_id, 馬番) で引いて付与（3着以内のみ値が入る）
-    hn = pd.to_numeric(sub.get("horse_number"), errors="coerce")
-    sub["place_payout"] = [pmap.get((r, h)) for r, h in zip(sub["race_id"], hn)]
+    if "horse_number" in sub.columns:
+        hn = pd.to_numeric(sub["horse_number"], errors="coerce")
+        sub["place_payout"] = [pmap.get((r, h)) for r, h in zip(sub["race_id"], hn)]
+    else:
+        sub["place_payout"] = None
 
     # card と同一の印付け（オッズがあれば妙味ベース、無ければ強さ順）
     marked = []
