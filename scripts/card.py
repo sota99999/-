@@ -183,14 +183,12 @@ def assign_marks(g: pd.DataFrame, value_mode: bool, strength_col: str = "show_p"
             → ◎の的中率と回収率を両立させたいときはこちら。
         "value" = EV≧1（オッズ以上に評価できる妙味馬）の中で p 最上位を本命に。
             → 妙味（穴）を本命に据えたいときはこちら。
-      印は役割で付ける（◎○▲△で狙いが違う）:
-        ◎ 的中重視 = 単勝確率(p)が最も高い「強い馬」（人気すぎは hon_min_odds で除外）。
-        ○ 対抗     = ◎を除いて強さ(strength_col)が最も高い馬（的中の相手）。
-        ▲ 回収重視 = 妙味馬(EV≧1)かつ強さ上位（中央値以上）の中で最も強い馬。
-                     （検証で「妙味×強さを強さ順」が最も回収が高く、EV順＝大穴
-                      寄りは逆効果だったため強さ順で選ぶ）
-        △ どちらも = 残りの妙味馬(EV≧1)かつ強さ上位の馬を強さ順に最大3頭
-                     （的中と回収の両取り。頭数はレースで可変）。
+      ○以降は妙味馬(EV≧1・出走数・オッズ条件)を強さ(strength_col)順に付ける:
+        ○ = 最も強い妙味馬（妙味の本線）。
+        ▲ 回収重視 = 妙味の2番手。市場は妙味でも#1を買い被るため、この層が
+                     最も回収が高い（検証で▲が単回収130〜160%台のヤマ）。
+        △ = 妙味の3番手以降（高回収の押さえ）。
+      該当が無ければ強さ上位で埋める。印の数はレースで変動する。
       ※hon_mode="value" のときは◎も妙味(EV≧1)の中の単勝確率最上位にする。
     value_mode=False（全頭診断・オッズなし）:
       単純に強さ順（strength_col 降順）で ◎○▲△△× を付ける。
@@ -200,12 +198,10 @@ def assign_marks(g: pd.DataFrame, value_mode: bool, strength_col: str = "show_p"
     if value_mode and "ev" in g.columns:
         p = pd.to_numeric(g["p"], errors="coerce")
         ev = pd.to_numeric(g["ev"], errors="coerce")
-        sc = pd.to_numeric(g.get(strength_col), errors="coerce")
         odds = pd.to_numeric(g.get("odds"), errors="coerce")
         runs = pd.to_numeric(g.get("runs_prior"), errors="coerce").fillna(0)
         # 妙味＝オッズ以上の評価。ただし出走歴と妥当なオッズに限定（大穴の過大評価を除外）
         overlay = (ev >= 1.0) & (runs >= min_runs) & (odds <= max_odds) & odds.notna()
-        used: list = []
 
         # ◎ 的中重視: 強い馬（人気すぎ除外）。value時は妙味の中の最強
         if hon_mode == "value":
@@ -214,29 +210,13 @@ def assign_marks(g: pd.DataFrame, value_mode: bool, strength_col: str = "show_p"
             elig = (runs >= min_runs) & (odds >= hon_min_odds) \
                 & (odds <= max_odds) & odds.notna()
             hon = (p[elig].idxmax() if elig.any() else p.idxmax())
-        g.loc[hon, "mark"] = "◎"; used.append(hon)
+        g.loc[hon, "mark"] = "◎"
 
-        # ○ 対抗: ◎を除いて強さ最上位（的中の相手）
-        sc_rem = sc.drop(index=used)
-        if sc_rem.notna().any():
-            taikou = sc_rem.idxmax()
-            g.loc[taikou, "mark"] = "○"; used.append(taikou)
-
-        # 妙味(EV≧1)かつ強さ上位(中央値以上)の馬＝回収のエンジン。▲△はここから選ぶ
-        med = sc.median()
-        both = [i for i in g.index[overlay]
-                if i not in used and pd.notna(sc.get(i)) and sc.get(i) >= med]
-
-        # ▲ 回収重視: bothプールで最も強い馬（強さ順がEV順より回収が高い）
-        if both:
-            ana = sc.loc[both].idxmax()
-            g.loc[ana, "mark"] = "▲"; used.append(ana)
-
-        # △ どちらも: 残りのbothプールを強さ順に最大3頭
-        rest_both = [i for i in both if i not in used]
-        rest_both.sort(key=lambda i: sc.get(i), reverse=True)
-        for i in rest_both[:3]:
-            g.loc[i, "mark"] = "△"
+        # ○▲△: ◎を除く妙味馬を強さ順に。○=本線 ▲=2番手(回収のヤマ) △=3番手以降
+        rest = g.loc[g.index[overlay].difference([hon])]
+        rest = rest.sort_values(strength_col, ascending=False)
+        for k, idx in enumerate(rest.index[:len(SUB_MARKS)]):
+            g.loc[idx, "mark"] = SUB_MARKS[k]
 
         order = {"◎": 0, "○": 1, "▲": 2, "△": 3}
         g["_o"] = g["mark"].map(lambda m: order.get(m, 9))
