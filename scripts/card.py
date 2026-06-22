@@ -171,14 +171,16 @@ SUB_MARKS = ["○", "▲", "△", "△", "△"]   # ◎の次以降（△の数�
 
 
 def assign_marks(g: pd.DataFrame, value_mode: bool, strength_col: str = "show_p",
-                 min_runs: int = 2) -> pd.DataFrame:
+                 min_runs: int = 3, max_odds: float = 30.0) -> pd.DataFrame:
     """1レース分の出走馬に印(mark列)を付け、印→強さ順に並べ替えて返す。
 
     value_mode=True（最終結論・オッズあり）:
-      ◎ = 単勝確率(p)が最も高く、かつオッズ以上の評価ができる馬
-          （EV≧1の妙味馬の中から。該当が無ければ単勝確率最上位を本命に）。
-      ○以降 = オッズ以上の評価ができる馬を複勝確率(show_p)順に。
-              妙味のある馬だけに印を付けるので、印の数はレースで変動する。
+      ◎ = 単勝確率(p)が最も高く、かつオッズ以上の評価ができる妙味馬。
+      ○以降 = オッズ以上の評価ができる妙味馬を複勝確率(show_p)順に。
+      妙味馬の条件は EV≧1 かつ「出走数 min_runs 以上・オッズ max_odds 以下」。
+      （能力未知の新馬や極端な大穴を除外し、過大評価のEVに振り回されないため。
+       検証で EV≧1×3走以上×30倍以下 が最も成績が良かったのを反映）。
+      該当が無ければ単勝確率最上位を本命に。印の数はレースで変動する。
     value_mode=False（全頭診断・オッズなし）:
       単純に強さ順（strength_col 降順）で ◎○▲△△× を付ける。
     """
@@ -187,8 +189,10 @@ def assign_marks(g: pd.DataFrame, value_mode: bool, strength_col: str = "show_p"
     if value_mode and "ev" in g.columns:
         p = pd.to_numeric(g["p"], errors="coerce")
         ev = pd.to_numeric(g["ev"], errors="coerce")
+        odds = pd.to_numeric(g.get("odds"), errors="coerce")
         runs = pd.to_numeric(g.get("runs_prior"), errors="coerce").fillna(0)
-        overlay = (ev >= 1.0) & (runs >= min_runs)   # オッズ以上の評価＝妙味
+        # 妙味＝オッズ以上の評価。ただし出走歴と妥当なオッズに限定（大穴の過大評価を除外）
+        overlay = (ev >= 1.0) & (runs >= min_runs) & (odds <= max_odds) & odds.notna()
         cand = g[overlay]
         hon = (pd.to_numeric(cand["p"], errors="coerce").idxmax()
                if len(cand) else p.idxmax())
@@ -226,8 +230,10 @@ def main(argv=None) -> int:
     p.add_argument("--race-id", help="このレースだけ")
     p.add_argument("--date", help="この開催日の全レース (YYYY-MM-DD)")
     p.add_argument("--top", type=int, default=0, help="上位何頭まで表示（0=全頭）")
-    p.add_argument("--mark-min-runs", type=int, default=2,
+    p.add_argument("--mark-min-runs", type=int, default=3,
                    help="最終結論で印(妙味馬)を付ける最低出走回数（能力未知馬を除外）")
+    p.add_argument("--mark-max-odds", type=float, default=30.0,
+                   help="最終結論で印(妙味馬)を付ける単勝オッズ上限（大穴の過大評価を除外）")
     p.add_argument("--weights", help='能力重視リウェイトの比率。例 '
                    '"ability=0.22,aptitude=0.22,bias=0.04,pace=0.04,jockey=0.04"')
     p.add_argument("--lean", type=float, default=0.0,
@@ -295,7 +301,8 @@ def main(argv=None) -> int:
     odds_h = f"{'オッズ':>6}{'EV':>7}" if has_odds else ""   # オッズあり最終結論時のみ
     for rid, g in sub.groupby("race_id"):
         g = assign_marks(g, value_mode=has_odds, strength_col=strength_col,
-                         min_runs=args.mark_min_runs).reset_index(drop=True)
+                         min_runs=args.mark_min_runs,
+                         max_odds=args.mark_max_odds).reset_index(drop=True)
         if args.top:
             g = g.head(args.top)
         print(f"\n=== {rid}  {names.get(rid, '')} ===")

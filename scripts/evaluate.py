@@ -72,8 +72,10 @@ def main(argv=None) -> int:
     p.add_argument("--to", dest="date_to", help="終了日 (YYYY-MM-DD)")
     p.add_argument("--mark-by", choices=["show", "win"], default="show",
                    help="全頭診断(オッズ無)の強さ順の基準: show=複勝率(既定), win=勝率")
-    p.add_argument("--mark-min-runs", type=int, default=2,
+    p.add_argument("--mark-min-runs", type=int, default=3,
                    help="最終結論で印(妙味馬)を付ける最低出走回数")
+    p.add_argument("--mark-max-odds", type=float, default=30.0,
+                   help="最終結論で印(妙味馬)を付ける単勝オッズ上限")
     p.add_argument("--weights", help="能力重視リウェイトの比率（card と同じ書式）")
     p.add_argument("--lean", type=float, default=0.0,
                    help="リウェイトの強さ倍率。既定0=較正優先（card と揃える）")
@@ -117,7 +119,8 @@ def main(argv=None) -> int:
     for _, g in sub.groupby("race_id"):
         vm = pd.to_numeric(g.get("odds"), errors="coerce").notna().any()
         marked.append(card.assign_marks(g, value_mode=vm, strength_col=strength_col,
-                                        min_runs=args.mark_min_runs))
+                                        min_runs=args.mark_min_runs,
+                                        max_odds=args.mark_max_odds))
     sub = pd.concat(marked, ignore_index=True)
 
     n_races = sub["race_id"].nunique()
