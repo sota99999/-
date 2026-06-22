@@ -134,6 +134,39 @@ def _to_int(s: str):
         return None
 
 
+def parse_laps(html: str) -> dict | None:
+    """結果ページHTMLから 200mごとのラップ列を抽出し、前後半・上り3F・前後傾を計算。
+
+    netkeiba(db/race)とも "12.4 - 10.9 - 11.5 - ..." のように ' - ' 区切りで
+    ラップを描画するため、その最長の小数列（各8〜16秒・4本以上）を採用する。
+    取れなければ None。pace_diff>0=後傾(前半遅後半速=瞬発力勝負),
+    <0=前傾(前半速後半遅=持続力勝負)。
+    """
+    import math
+    best: list[float] | None = None
+    for m in re.finditer(r"(?:\d{1,2}\.\d\s*[-–]\s*){3,}\d{1,2}\.\d", html):
+        seq = [float(x) for x in re.findall(r"\d{1,2}\.\d", m.group(0))]
+        if len(seq) >= 4 and all(8.0 <= v <= 16.0 for v in seq):
+            if best is None or len(seq) > len(best):
+                best = seq
+    if not best:
+        return None
+    n = len(best)
+    h = math.ceil(n / 2)
+    first_half, second_half = sum(best[:h]), sum(best[h:])
+    n1, n2 = h, n - h
+    pace_diff = (first_half / n1 - second_half / n2) if n2 else None
+    return {
+        "lap_seq": ",".join(f"{v:.1f}" for v in best),
+        "n_laps": n,
+        "first_half": round(first_half, 1),
+        "second_half": round(second_half, 1),
+        "race_first3f": round(sum(best[:3]), 1),
+        "race_last3f": round(sum(best[-3:]), 1),
+        "pace_diff": round(pace_diff, 3) if pace_diff is not None else None,
+    }
+
+
 def _time_to_seconds(s: str):
     """'1:58.4' -> 118.4 秒。'58.4' -> 58.4。"""
     if not s:
@@ -282,7 +315,8 @@ def parse_race(html: str, race_id: str) -> dict:
                     "popularity": _to_int(pops[i]) if i < len(pops) else None,
                 })
 
-    return {"race": race, "results": results, "payouts": payouts}
+    return {"race": race, "results": results, "payouts": payouts,
+            "laps": parse_laps(html)}
 
 
 class _Blank:
@@ -377,6 +411,18 @@ def upsert_race(conn: sqlite3.Connection, parsed: dict) -> None:
             """INSERT OR REPLACE INTO payouts(race_id, bet_type, combination, payout, popularity)
                VALUES (:race_id, :bet_type, :combination, :payout, :popularity)""",
             p,
+        )
+
+    # ラップ（取得できた場合のみ）
+    laps = parsed.get("laps")
+    if laps:
+        conn.execute(
+            """INSERT OR REPLACE INTO race_laps
+                   (race_id, lap_seq, n_laps, first_half, second_half,
+                    race_first3f, race_last3f, pace_diff)
+               VALUES (:race_id, :lap_seq, :n_laps, :first_half, :second_half,
+                       :race_first3f, :race_last3f, :pace_diff)""",
+            {"race_id": race["race_id"], **laps},
         )
 
     conn.commit()
@@ -632,7 +678,8 @@ def parse_result_live(html: str, race_id: str) -> dict:
             results.append(row)
 
     race["field_size"] = len(results) or None
-    return {"race": race, "results": results, "payouts": []}
+    return {"race": race, "results": results, "payouts": [],
+            "laps": parse_laps(html)}
 
 
 def _has_finish(parsed: dict) -> bool:
