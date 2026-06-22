@@ -40,6 +40,7 @@ COL_CATEGORY = {
     "prev_speed": "能力(時計/SP)", "class_adj_speed_prior": "能力(時計/SP)",
     # ① 同条件での能力
     "same_runs_prior": "①同条件の能力", "same_show_rate_prior": "①同条件の能力",
+    "same_wins_prior": "①同条件の能力", "samed_wins_prior": "①同条件の能力",
     "same_avg_speed_prior": "①同条件の能力", "same_best_speed_prior": "①同条件の能力",
     "same_avg_finish_prior": "①同条件の能力", "same_best_last3f_prior": "①同条件の能力",
     "samed_runs_prior": "①同条件の能力", "samed_show_rate_prior": "①同条件の能力",

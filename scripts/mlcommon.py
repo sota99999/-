@@ -25,11 +25,11 @@ CATEGORICAL = ["venue_id", "surface", "prev_surface",
 # 条件特化モデルの特徴量ホワイトリスト（①同条件 ②似た条件 ③展開・ラップ のみ）
 #   騎手・馬体重・ローテ・クラス・近走・全体Elo などは意図的に含めない。
 CONDITION_FEATURES = [
-    # ① 同条件での能力（競馬場×馬場種別×距離帯×道悪が一致する過去走）
-    "same_runs_prior", "same_show_rate_prior", "same_avg_speed_prior",
+    # ① 同条件での能力（競馬場×馬場種別×距離帯×道悪が一致する過去走）。wins=同条件勝利数
+    "same_runs_prior", "same_wins_prior", "same_show_rate_prior", "same_avg_speed_prior",
     "same_best_speed_prior", "same_avg_finish_prior", "same_best_last3f_prior",
     # ① 同条件（緩め）: 道悪不問の競馬場×馬場種別×距離帯 / 距離不問の競馬場×馬場種別
-    "samed_runs_prior", "samed_show_rate_prior", "samed_avg_speed_prior", "samed_best_speed_prior",
+    "samed_runs_prior", "samed_wins_prior", "samed_show_rate_prior", "samed_avg_speed_prior", "samed_best_speed_prior",
     "vs_runs_prior", "vs_show_rate_prior", "vs_avg_speed_prior", "vs_best_speed_prior",
     # ② 似た条件での能力（回り×直線長×馬場種別×距離帯 / 馬場種別×距離帯）
     "sim_runs_prior", "sim_show_rate_prior", "sim_avg_speed_prior", "sim_best_speed_prior",

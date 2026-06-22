@@ -236,13 +236,15 @@ base AS (
         ROUND(1.0 * SUM(finish_position <= 3) OVER w_dir / COUNT(*) OVER w_dir, 3) AS dir_show_rate_prior,
         -- ① 同条件（競馬場×馬場種別×距離帯×道悪フラグ）の過去能力・成績
         COUNT(*) OVER w_same                              AS same_runs_prior,
+        SUM(finish_position = 1) OVER w_same              AS same_wins_prior,
         ROUND(1.0 * SUM(finish_position <= 3) OVER w_same / COUNT(*) OVER w_same, 3) AS same_show_rate_prior,
         ROUND(AVG(speed_index) OVER w_same, 1)            AS same_avg_speed_prior,
         MAX(speed_index) OVER w_same                      AS same_best_speed_prior,
         ROUND(AVG(finish_position) OVER w_same, 2)        AS same_avg_finish_prior,
         MIN(last_3f) OVER w_same                          AS same_best_last3f_prior,
-        -- ① 同条件（緩め1: 競馬場×馬場種別×距離帯、道悪不問）
+        -- ① 同条件（緩め1: 競馬場×馬場種別×距離帯、道悪不問）。勝利数=コース実績の鋭い指標
         COUNT(*) OVER w_samed                             AS samed_runs_prior,
+        SUM(finish_position = 1) OVER w_samed             AS samed_wins_prior,
         ROUND(1.0 * SUM(finish_position <= 3) OVER w_samed / COUNT(*) OVER w_samed, 3) AS samed_show_rate_prior,
         ROUND(AVG(speed_index) OVER w_samed, 1)           AS samed_avg_speed_prior,
         MAX(speed_index) OVER w_samed                     AS samed_best_speed_prior,
@@ -349,9 +351,9 @@ SELECT
     off_runs_prior, off_show_rate_prior,                 -- 道悪適性
     dist_runs_prior, dist_show_rate_prior,               -- 距離適性
     dir_runs_prior, dir_show_rate_prior,                 -- 回り適性
-    -- ① 同条件の能力（競馬場×馬場種別×距離帯×道悪）
-    same_runs_prior, same_show_rate_prior, same_avg_speed_prior, same_best_speed_prior,
-    samed_runs_prior, samed_show_rate_prior, samed_avg_speed_prior, samed_best_speed_prior,
+    -- ① 同条件の能力（競馬場×馬場種別×距離帯×道悪）。*_wins_prior=同条件での勝利数
+    same_runs_prior, same_wins_prior, same_show_rate_prior, same_avg_speed_prior, same_best_speed_prior,
+    samed_runs_prior, samed_wins_prior, samed_show_rate_prior, samed_avg_speed_prior, samed_best_speed_prior,
     vs_runs_prior, vs_show_rate_prior, vs_avg_speed_prior, vs_best_speed_prior,
     same_avg_finish_prior, same_best_last3f_prior,
     -- ② 似た条件の能力（回り×直線長×馬場種別×距離帯 / 馬場種別×距離帯）
