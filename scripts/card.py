@@ -186,8 +186,9 @@ def assign_marks(g: pd.DataFrame, value_mode: bool, strength_col: str = "show_p"
       印は役割で付ける（◎○▲△で狙いが違う）:
         ◎ 的中重視 = 単勝確率(p)が最も高い「強い馬」（人気すぎは hon_min_odds で除外）。
         ○ 対抗     = ◎を除いて強さ(strength_col)が最も高い馬（的中の相手）。
-        ▲ 回収重視 = 妙味馬(EV≧1)かつ強さ上位（中央値以上）の中で期待値(ev)最大。
-                     （過大評価の大穴を避け、堅実な妙味で回収を狙う）
+        ▲ 回収重視 = 妙味馬(EV≧1)かつ強さ上位（中央値以上）の中で最も強い馬。
+                     （検証で「妙味×強さを強さ順」が最も回収が高く、EV順＝大穴
+                      寄りは逆効果だったため強さ順で選ぶ）
         △ どちらも = 残りの妙味馬(EV≧1)かつ強さ上位の馬を強さ順に最大3頭
                      （的中と回収の両取り。頭数はレースで可変）。
       ※hon_mode="value" のときは◎も妙味(EV≧1)の中の単勝確率最上位にする。
@@ -226,9 +227,9 @@ def assign_marks(g: pd.DataFrame, value_mode: bool, strength_col: str = "show_p"
         both = [i for i in g.index[overlay]
                 if i not in used and pd.notna(sc.get(i)) and sc.get(i) >= med]
 
-        # ▲ 回収重視: bothプールで期待値最大（堅実な妙味）
+        # ▲ 回収重視: bothプールで最も強い馬（強さ順がEV順より回収が高い）
         if both:
-            ana = ev.loc[both].idxmax()
+            ana = sc.loc[both].idxmax()
             g.loc[ana, "mark"] = "▲"; used.append(ana)
 
         # △ どちらも: 残りのbothプールを強さ順に最大3頭
