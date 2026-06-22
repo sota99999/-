@@ -171,7 +171,7 @@ SUB_MARKS = ["○", "▲", "△", "△", "△"]   # ◎の次以降（△の数�
 
 
 def assign_marks(g: pd.DataFrame, value_mode: bool, strength_col: str = "show_p",
-                 min_runs: int = 3, max_odds: float = 30.0) -> pd.DataFrame:
+                 min_runs: int = 3, max_odds: float = 20.0) -> pd.DataFrame:
     """1レース分の出走馬に印(mark列)を付け、印→強さ順に並べ替えて返す。
 
     value_mode=True（最終結論・オッズあり）:
@@ -232,7 +232,7 @@ def main(argv=None) -> int:
     p.add_argument("--top", type=int, default=0, help="上位何頭まで表示（0=全頭）")
     p.add_argument("--mark-min-runs", type=int, default=3,
                    help="最終結論で印(妙味馬)を付ける最低出走回数（能力未知馬を除外）")
-    p.add_argument("--mark-max-odds", type=float, default=30.0,
+    p.add_argument("--mark-max-odds", type=float, default=20.0,
                    help="最終結論で印(妙味馬)を付ける単勝オッズ上限（大穴の過大評価を除外）")
     p.add_argument("--weights", help='能力重視リウェイトの比率。例 '
                    '"ability=0.22,aptitude=0.22,bias=0.04,pace=0.04,jockey=0.04"')

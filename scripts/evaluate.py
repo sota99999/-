@@ -74,7 +74,7 @@ def main(argv=None) -> int:
                    help="全頭診断(オッズ無)の強さ順の基準: show=複勝率(既定), win=勝率")
     p.add_argument("--mark-min-runs", type=int, default=3,
                    help="最終結論で印(妙味馬)を付ける最低出走回数")
-    p.add_argument("--mark-max-odds", type=float, default=30.0,
+    p.add_argument("--mark-max-odds", type=float, default=20.0,
                    help="最終結論で印(妙味馬)を付ける単勝オッズ上限")
     p.add_argument("--weights", help="能力重視リウェイトの比率（card と同じ書式）")
     p.add_argument("--lean", type=float, default=0.0,
