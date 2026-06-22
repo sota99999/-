@@ -144,7 +144,9 @@ WITH raw AS (
         -- コース別枠バイアス適合: 内枠有利コースで内枠なら正, 外枠なら負（n>=100のみ）
         CASE WHEN cb.inner_bias IS NOT NULL AND cb.n >= 100 AND ra.field_size > 0
              THEN ROUND(cb.inner_bias * (0.5 - 1.0 * r.post_position / ra.field_size) * 2, 4)
-             END AS draw_bias_fit
+             END AS draw_bias_fit,
+        -- 直線の長さ区分（長い直線＝瞬発力勝負になりやすい。新潟/東京/中京=長い）
+        CASE WHEN ra.venue_id IN ('04','05','07') THEN 'long' ELSE 'short' END AS straight_cat
     FROM results r
     JOIN races  ra ON r.race_id  = ra.race_id
     LEFT JOIN horses h ON r.horse_id = h.horse_id
@@ -193,6 +195,22 @@ base AS (
         -- 適性: 回り（同じ右/左回りでの過去複勝率）
         COUNT(*) OVER w_dir                               AS dir_runs_prior,
         ROUND(1.0 * SUM(finish_position <= 3) OVER w_dir / COUNT(*) OVER w_dir, 3) AS dir_show_rate_prior,
+        -- ① 同条件（競馬場×馬場種別×距離帯×道悪フラグ）の過去能力・成績
+        COUNT(*) OVER w_same                              AS same_runs_prior,
+        ROUND(1.0 * SUM(finish_position <= 3) OVER w_same / COUNT(*) OVER w_same, 3) AS same_show_rate_prior,
+        ROUND(AVG(speed_index) OVER w_same, 1)            AS same_avg_speed_prior,
+        MAX(speed_index) OVER w_same                      AS same_best_speed_prior,
+        ROUND(AVG(finish_position) OVER w_same, 2)        AS same_avg_finish_prior,
+        MIN(last_3f) OVER w_same                          AS same_best_last3f_prior,
+        -- ② 似た条件（回り×直線長×馬場種別×距離帯）の過去能力・成績
+        COUNT(*) OVER w_sim                               AS sim_runs_prior,
+        ROUND(1.0 * SUM(finish_position <= 3) OVER w_sim / COUNT(*) OVER w_sim, 3) AS sim_show_rate_prior,
+        ROUND(AVG(speed_index) OVER w_sim, 1)             AS sim_avg_speed_prior,
+        MAX(speed_index) OVER w_sim                       AS sim_best_speed_prior,
+        -- ② 馬場種別×距離帯（控えのベース能力。同/似条件が無い馬の下支え）
+        COUNT(*) OVER w_sd                                AS sd_runs_prior,
+        ROUND(AVG(speed_index) OVER w_sd, 1)              AS sd_avg_speed_prior,
+        MAX(speed_index) OVER w_sd                        AS sd_best_speed_prior,
         -- 直近フォーム（直近3走の複勝率・平均着順、当該レースを除く）
         ROUND(1.0 * SUM(finish_position <= 3) OVER w_recent / COUNT(*) OVER w_recent, 3) AS recent3_show_rate,
         ROUND(AVG(finish_position) OVER w_recent, 2)      AS recent3_avg_finish,
@@ -221,6 +239,15 @@ base AS (
                      ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING),
         w_dir    AS (PARTITION BY horse_id, direction ORDER BY race_date
                      ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING),
+        -- ① 同条件: 競馬場×馬場種別×距離帯×道悪フラグ が一致する過去走のみ
+        w_same   AS (PARTITION BY horse_id, venue_id, surface, dist_band, is_offtrack
+                     ORDER BY race_date ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING),
+        -- ② 似た条件: 回り×直線長×馬場種別×距離帯 が一致（例 東京⇔新潟=左・長直線）
+        w_sim    AS (PARTITION BY horse_id, direction, straight_cat, surface, dist_band
+                     ORDER BY race_date ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING),
+        -- ② 馬場種別×距離帯（控えのベース能力）
+        w_sd     AS (PARTITION BY horse_id, surface, dist_band
+                     ORDER BY race_date ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING),
         -- 直近3走（現在行の直前3走）
         w_recent AS (PARTITION BY horse_id ORDER BY race_date
                      ROWS BETWEEN 3 PRECEDING AND 1 PRECEDING)
@@ -257,6 +284,12 @@ SELECT
     off_runs_prior, off_show_rate_prior,                 -- 道悪適性
     dist_runs_prior, dist_show_rate_prior,               -- 距離適性
     dir_runs_prior, dir_show_rate_prior,                 -- 回り適性
+    -- ① 同条件の能力（競馬場×馬場種別×距離帯×道悪）
+    same_runs_prior, same_show_rate_prior, same_avg_speed_prior, same_best_speed_prior,
+    same_avg_finish_prior, same_best_last3f_prior,
+    -- ② 似た条件の能力（回り×直線長×馬場種別×距離帯 / 馬場種別×距離帯）
+    sim_runs_prior, sim_show_rate_prior, sim_avg_speed_prior, sim_best_speed_prior,
+    sd_runs_prior, sd_avg_speed_prior, sd_best_speed_prior,
     recent3_show_rate, recent3_avg_finish,               -- 直近3走フォーム
     prev_finish, prev_popularity, prev_surface, prev_distance, days_since_last, distance_change,
     -- ---- ローテーション（再収集不要・既存データから導出） ------------------

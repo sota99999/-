@@ -79,6 +79,8 @@ def main(argv=None) -> int:
                    help="確率較正の方法（既定none）。sigmoid=Platt, isotonic=単調回帰")
     p.add_argument("--no-odds", action="store_true",
                    help="オッズ・人気を特徴量から除外（出馬表段階でオッズ未取得でも予想できるモデル）")
+    p.add_argument("--feature-set", choices=["full", "condition"], default="full",
+                   help="full=全特徴量, condition=①同条件②似た条件③展開のみ（条件特化）")
     p.add_argument("--save-model", help="学習後にモデルを保存するパス（例: model.pkl）")
     args = p.parse_args(argv)
 
@@ -93,8 +95,11 @@ def main(argv=None) -> int:
 
     train_mask, valid_mask, cut = time_split(df, args.valid_frac)
     extra_drop = ["odds", "popularity"] if args.no_odds else None
-    x = mlcommon.build_features(df, extra_drop=extra_drop)
+    keep = mlcommon.CONDITION_FEATURES if args.feature_set == "condition" else None
+    x = mlcommon.build_features(df, extra_drop=extra_drop, keep=keep)
     feature_columns = list(x.columns)
+    if keep is not None:
+        print(f"特徴量セット: condition（{len(feature_columns)}列）→ {feature_columns}")
     y = df[args.target].astype(int)
     x_tr, y_tr = x[train_mask], y[train_mask]
     x_va, y_va = x[valid_mask], y[valid_mask]

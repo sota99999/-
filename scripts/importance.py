@@ -37,8 +37,18 @@ COL_CATEGORY = {
     "wins_prior": "能力(Elo/実績)", "runs_prior": "能力(Elo/実績)",
     # 能力（時計）
     "avg_speed_prior": "能力(時計/SP)", "best_speed_prior": "能力(時計/SP)",
-    "prev_speed": "能力(時計/SP)", "best_last3f_prior": "能力(時計/SP)",
-    "class_adj_speed_prior": "能力(時計/SP)",
+    "prev_speed": "能力(時計/SP)", "class_adj_speed_prior": "能力(時計/SP)",
+    # ① 同条件での能力
+    "same_runs_prior": "①同条件の能力", "same_show_rate_prior": "①同条件の能力",
+    "same_avg_speed_prior": "①同条件の能力", "same_best_speed_prior": "①同条件の能力",
+    "same_avg_finish_prior": "①同条件の能力", "same_best_last3f_prior": "①同条件の能力",
+    # ② 似た条件での能力
+    "sim_runs_prior": "②似た条件の能力", "sim_show_rate_prior": "②似た条件の能力",
+    "sim_avg_speed_prior": "②似た条件の能力", "sim_best_speed_prior": "②似た条件の能力",
+    "sd_runs_prior": "②似た条件の能力", "sd_avg_speed_prior": "②似た条件の能力",
+    "sd_best_speed_prior": "②似た条件の能力",
+    # ③ レース展開・ラップ（瞬発力指標の上り3Fもここ）
+    "best_last3f_prior": "③展開・ラップ(瞬発力)",
     # クラス
     "class_level": "クラス(格)", "avg_class_level_prior": "クラス(格)",
     "prev_class_level": "クラス(格)", "class_change": "クラス(格)",
@@ -54,9 +64,9 @@ COL_CATEGORY = {
     # 騎手
     "jockey_win_rate_prior": "騎手", "jockey_show_rate_prior": "騎手",
     "jockey_rides_prior": "騎手",
-    # 展開
-    "race_pace_estimate": "展開(ペース)", "pace_fit": "展開(ペース)",
-    "run_style_prior": "展開(脚質)",
+    # ③ 展開・ラップ
+    "race_pace_estimate": "③展開・ラップ(ペース)", "pace_fit": "③展開・ラップ(ペース)",
+    "run_style_prior": "③展開・ラップ(脚質)",
     # 枠・バイアス
     "draw_ratio": "枠/バイアス", "draw_bias_fit": "枠/バイアス",
     "post_position": "枠/バイアス", "horse_number": "枠/バイアス",

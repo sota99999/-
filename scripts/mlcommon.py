@@ -22,6 +22,19 @@ DROP_COLS = ["race_id", "horse_id", "horse_name", "race_date",
 CATEGORICAL = ["venue_id", "surface", "prev_surface",
                "track_condition", "direction", "weather"]
 
+# 条件特化モデルの特徴量ホワイトリスト（①同条件 ②似た条件 ③展開・ラップ のみ）
+#   騎手・馬体重・ローテ・クラス・近走・全体Elo などは意図的に含めない。
+CONDITION_FEATURES = [
+    # ① 同条件での能力（競馬場×馬場種別×距離帯×道悪が一致する過去走）
+    "same_runs_prior", "same_show_rate_prior", "same_avg_speed_prior",
+    "same_best_speed_prior", "same_avg_finish_prior", "same_best_last3f_prior",
+    # ② 似た条件での能力（回り×直線長×馬場種別×距離帯 / 馬場種別×距離帯）
+    "sim_runs_prior", "sim_show_rate_prior", "sim_avg_speed_prior", "sim_best_speed_prior",
+    "sd_runs_prior", "sd_avg_speed_prior", "sd_best_speed_prior",
+    # ③ レース展開・ラップ（ペース推定・展開適合・脚質・瞬発力指標）
+    "race_pace_estimate", "pace_fit", "run_style_prior", "best_last3f_prior", "field_size",
+]
+
 
 # -----------------------------------------------------------------------------
 # データ読み込み
@@ -47,16 +60,22 @@ def load_data(db: str | None, csv: str | None, min_runs: int = 0) -> pd.DataFram
 # 特徴量行列
 # -----------------------------------------------------------------------------
 def build_features(df: pd.DataFrame, feature_columns: list[str] | None = None,
-                   extra_drop: list[str] | None = None) -> pd.DataFrame:
+                   extra_drop: list[str] | None = None,
+                   keep: list[str] | None = None) -> pd.DataFrame:
     """特徴量行列 X を作る。
 
     feature_columns を渡すと、その列順・列集合に reindex して揃える
     （学習時と予測時で one-hot 後の列を一致させるために必須）。
     extra_drop に列名を渡すと、その列も特徴量から除外する
     （例: ["odds","popularity"] でオッズ非依存モデルを作る）。
+    keep にホワイトリストを渡すと、その列だけを特徴量にする
+    （例: CONDITION_FEATURES で条件特化モデルを作る）。
     """
     drop = list(DROP_COLS) + (list(extra_drop) if extra_drop else [])
     x = df.drop(columns=[c for c in drop if c in df.columns], errors="ignore")
+    if keep is not None:
+        keepset = set(keep)
+        x = x[[c for c in x.columns if c in keepset]]
     cat = [c for c in CATEGORICAL if c in x.columns]
     x = pd.get_dummies(x, columns=cat, dummy_na=True)
     x = x.apply(pd.to_numeric, errors="coerce")
