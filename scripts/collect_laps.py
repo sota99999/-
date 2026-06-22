@@ -32,18 +32,21 @@ CREATE = """CREATE TABLE IF NOT EXISTS race_laps (
 
 
 def _fetch_laps(race_id: str):
-    """db.netkeiba → race.netkeiba の順でラップを取得（取れた dict を返す）。"""
-    try:
-        laps = scraper.parse_laps(scraper.fetch_html(race_id))
-        if laps:
-            return laps, "db"
-    except Exception:  # noqa: BLE001
-        pass
+    """race.netkeiba(速報) → db.netkeiba の順でラップを取得（取れた dict を返す）。
+
+    db.netkeiba のラップ表は JS 描画で静的HTMLが空のため、速報側を先に試す。
+    """
     try:
         html = scraper.http_get(scraper.RESULT_URL.format(race_id=race_id), encoding="utf-8")
         laps = scraper.parse_laps(html)
         if laps:
             return laps, "live"
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        laps = scraper.parse_laps(scraper.fetch_html(race_id))
+        if laps:
+            return laps, "db"
     except Exception:  # noqa: BLE001
         pass
     return None, None

@@ -134,37 +134,60 @@ def _to_int(s: str):
         return None
 
 
-def parse_laps(html: str) -> dict | None:
-    """結果ページHTMLから 200mごとのラップ列を抽出し、前後半・上り3F・前後傾を計算。
-
-    netkeiba(db/race)とも "12.4 - 10.9 - 11.5 - ..." のように ' - ' 区切りで
-    ラップを描画するため、その最長の小数列（各8〜16秒・4本以上）を採用する。
-    取れなければ None。pace_diff>0=後傾(前半遅後半速=瞬発力勝負),
-    <0=前傾(前半速後半遅=持続力勝負)。
-    """
+def _lap_metrics(laps: list[float]) -> dict:
+    """200mラップ列から前後半・上り3F・前後傾(pace_diff)を計算して返す。"""
     import math
-    best: list[float] | None = None
-    for m in re.finditer(r"(?:\d{1,2}\.\d\s*[-–]\s*){3,}\d{1,2}\.\d", html):
-        seq = [float(x) for x in re.findall(r"\d{1,2}\.\d", m.group(0))]
-        if len(seq) >= 4 and all(8.0 <= v <= 16.0 for v in seq):
-            if best is None or len(seq) > len(best):
-                best = seq
-    if not best:
-        return None
-    n = len(best)
+    n = len(laps)
     h = math.ceil(n / 2)
-    first_half, second_half = sum(best[:h]), sum(best[h:])
+    first_half, second_half = sum(laps[:h]), sum(laps[h:])
     n1, n2 = h, n - h
     pace_diff = (first_half / n1 - second_half / n2) if n2 else None
     return {
-        "lap_seq": ",".join(f"{v:.1f}" for v in best),
+        "lap_seq": ",".join(f"{v:.1f}" for v in laps),
         "n_laps": n,
         "first_half": round(first_half, 1),
         "second_half": round(second_half, 1),
-        "race_first3f": round(sum(best[:3]), 1),
-        "race_last3f": round(sum(best[-3:]), 1),
+        "race_first3f": round(sum(laps[:3]), 1),
+        "race_last3f": round(sum(laps[-3:]), 1),
         "pace_diff": round(pace_diff, 3) if pace_diff is not None else None,
     }
+
+
+def parse_laps(html: str) -> dict | None:
+    """結果ページHTMLから 200mごとのラップ列を抽出して指標化する。
+
+    race.netkeiba は table.Race_HaronTime にラップを持つ:
+      Header行(200m,400m..) / 累計行(12.7,24.0..) / ラップ行(12.7,11.3,11.5..)。
+    各セルが全て 8〜16秒の行＝200mごとのラップ行として採用する（累計行は
+    値が16超のため自然に除外される）。取れなければ ' - ' 区切りの旧式も試す。
+    取れなければ None。pace_diff>0=後傾(瞬発力勝負), <0=前傾(持続力勝負)。
+    """
+    soup = BeautifulSoup(html, "lxml")
+    best: list[float] | None = None
+    for tbl in soup.select("table.Race_HaronTime, table[summary='ラップタイム']"):
+        for tr in tbl.find_all("tr"):
+            vals = []
+            ok = True
+            for td in tr.find_all("td"):
+                t = td.get_text(strip=True)
+                try:
+                    v = float(t)
+                except ValueError:    # 累計の "1:10.4" 等は弾く
+                    ok = False
+                    break
+                vals.append(v)
+            if ok and len(vals) >= 4 and all(8.0 <= v <= 16.0 for v in vals):
+                if best is None or len(vals) > len(best):
+                    best = vals
+    if best is None:   # フォールバック: "12.4 - 10.9 - ..." 形式
+        for m in re.finditer(r"(?:\d{1,2}\.\d\s*[-–]\s*){3,}\d{1,2}\.\d", html):
+            seq = [float(x) for x in re.findall(r"\d{1,2}\.\d", m.group(0))]
+            if len(seq) >= 4 and all(8.0 <= v <= 16.0 for v in seq):
+                if best is None or len(seq) > len(best):
+                    best = seq
+    if not best:
+        return None
+    return _lap_metrics(best)
 
 
 def _time_to_seconds(s: str):
