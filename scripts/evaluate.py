@@ -90,6 +90,8 @@ def main(argv=None) -> int:
     p.add_argument("--weights", help="能力重視リウェイトの比率（card と同じ書式）")
     p.add_argument("--lean", type=float, default=0.0,
                    help="リウェイトの強さ倍率。既定0=較正優先（card と揃える）")
+    p.add_argument("--same-boost", type=float, default=0.0,
+                   help="同条件スペシャリスト・ブーストの強さ（0=無効。card と揃える）")
     p.add_argument("--min-ev", type=float, default=1.0,
                    help="EV戦略でこの値以上のEVの馬を単勝買いした場合の成績を出す")
     p.add_argument("--min-runs", type=int, default=3,
@@ -124,7 +126,7 @@ def main(argv=None) -> int:
         return 0
 
     # card と同一の採点
-    sub = card.compute_scores(sub, bundle, show_bundle, weights)
+    sub = card.compute_scores(sub, bundle, show_bundle, weights, same_boost=args.same_boost)
     strength_col = "show_p" if (args.mark_by == "show" and show_bundle) else "p"
 
     # 実着順を結合（出走取消などで着順が無い馬は NaN）

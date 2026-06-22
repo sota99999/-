@@ -117,7 +117,32 @@ def _add_race_z(df: pd.DataFrame, cols) -> None:
             df[c + "_z"] = ((df[c] - gg.transform("mean")) / sd).fillna(0.0)
 
 
-def compute_scores(sub: pd.DataFrame, bundle: dict, show_bundle, weights: dict) -> pd.DataFrame:
+def _samecond_boost(sub: pd.DataFrame, strength: float) -> pd.Series:
+    """同条件スペシャリストの確率ブースト係数（レース内）を返す。
+
+    「①同条件での実績が良ければ、他条件の悪さを上書きして高評価する」という
+    競馬の定石を明示実装する。同条件での勝利数を主、好走率を従にした信号を
+    レース内で z 化し、exp(strength × z) を掛け率として返す（平均≒1）。
+    strength=0 で無効。samed_*（道悪不問の競馬場×馬場×距離帯）を主に使う。
+    """
+    if strength <= 0:
+        return pd.Series(1.0, index=sub.index)
+    sw = pd.to_numeric(sub.get("samed_wins_prior"), errors="coerce").fillna(0.0)
+    ss = pd.to_numeric(sub.get("samed_show_rate_prior"), errors="coerce").fillna(0.0)
+    sr = pd.to_numeric(sub.get("samed_runs_prior"), errors="coerce").fillna(0.0)
+    # 厳密同条件(same_)の勝利も加点（道悪まで一致する完全同条件は更に強い）
+    sw2 = pd.to_numeric(sub.get("same_wins_prior"), errors="coerce").fillna(0.0)
+    # 出走1回以上の馬だけ信号を持つ（未経験は0＝中立）
+    signal = (sw + 0.6 * sw2 + 0.5 * ss).where(sr >= 1, 0.0)
+    sub = sub.assign(_sig=signal)
+    gg = sub.groupby("race_id")["_sig"]
+    sd = gg.transform("std").replace(0, np.nan)
+    z = ((sub["_sig"] - gg.transform("mean")) / sd).fillna(0.0)
+    return np.exp((strength * z).clip(-2.0, 2.0))
+
+
+def compute_scores(sub: pd.DataFrame, bundle: dict, show_bundle, weights: dict,
+                   same_boost: float = 0.0) -> pd.DataFrame:
     """モデル予測を行い p(勝率)/show_p(複勝率)/ev を付与して返す。
 
     表示する確率は較正済みモデルの素の値（リークなし）を基本にする:
@@ -129,7 +154,8 @@ def compute_scores(sub: pd.DataFrame, bundle: dict, show_bundle, weights: dict) 
 
     評価比率(weights)が全て0でない場合のみ、各グループの他馬比較z を合成した
     tilt で確率を増減させる「能力重視リウェイト」を適用する（既定は無効＝較正優先）。
-    card 表示と evaluate（的中集計）で同一採点になるよう共通化している。
+    same_boost>0 のとき、同条件スペシャリスト・ブーストを掛けて①同条件の実績で
+    他条件の悪さを上書きする（card 表示と evaluate で同一採点になるよう共通化）。
     """
     sub = sub.copy()
     x = mlcommon.build_features(sub, feature_columns=bundle["feature_columns"])
@@ -151,6 +177,9 @@ def compute_scores(sub: pd.DataFrame, bundle: dict, show_bundle, weights: dict) 
         adj = np.exp(sub["tilt"].clip(-2.0, 2.0))
     else:
         adj = pd.Series(1.0, index=sub.index)
+
+    # 同条件スペシャリスト・ブースト（①同条件の実績で他を上書き）
+    adj = adj * _samecond_boost(sub, same_boost)
 
     # 単勝: 合計1に正規化（較正済みの単勝確率）
     sub["p_adj"] = sub["p_raw"] * adj
@@ -259,6 +288,8 @@ def main(argv=None) -> int:
                    '"ability=0.22,aptitude=0.22,bias=0.04,pace=0.04,jockey=0.04"')
     p.add_argument("--lean", type=float, default=0.0,
                    help="リウェイトの強さ倍率。既定0=較正優先（リウェイトなし）, 1で適用")
+    p.add_argument("--same-boost", type=float, default=0.0,
+                   help="同条件スペシャリスト・ブーストの強さ（0=無効。0.5〜1.0で①同条件の実績を上乗せ）")
     args = p.parse_args(argv)
 
     weights = parse_weights(args.weights)
@@ -287,7 +318,7 @@ def main(argv=None) -> int:
         return 0
 
     # モデル予測（card と evaluate で共通の採点）
-    sub = compute_scores(sub, bundle, show_bundle, weights)
+    sub = compute_scores(sub, bundle, show_bundle, weights, same_boost=args.same_boost)
 
     # オッズがあれば「最終結論（妙味で印）」、無ければ「全頭診断（強さ順で印）」
     has_odds = pd.to_numeric(sub.get("odds"), errors="coerce").notna().any()
