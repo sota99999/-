@@ -28,6 +28,9 @@ CONDITION_FEATURES = [
     # ① 同条件での能力（競馬場×馬場種別×距離帯×道悪が一致する過去走）
     "same_runs_prior", "same_show_rate_prior", "same_avg_speed_prior",
     "same_best_speed_prior", "same_avg_finish_prior", "same_best_last3f_prior",
+    # ① 同条件（緩め）: 道悪不問の競馬場×馬場種別×距離帯 / 距離不問の競馬場×馬場種別
+    "samed_runs_prior", "samed_show_rate_prior", "samed_avg_speed_prior", "samed_best_speed_prior",
+    "vs_runs_prior", "vs_show_rate_prior", "vs_avg_speed_prior", "vs_best_speed_prior",
     # ② 似た条件での能力（回り×直線長×馬場種別×距離帯 / 馬場種別×距離帯）
     "sim_runs_prior", "sim_show_rate_prior", "sim_avg_speed_prior", "sim_best_speed_prior",
     "sd_runs_prior", "sd_avg_speed_prior", "sd_best_speed_prior",

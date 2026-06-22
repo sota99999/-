@@ -241,6 +241,16 @@ base AS (
         MAX(speed_index) OVER w_same                      AS same_best_speed_prior,
         ROUND(AVG(finish_position) OVER w_same, 2)        AS same_avg_finish_prior,
         MIN(last_3f) OVER w_same                          AS same_best_last3f_prior,
+        -- ① 同条件（緩め1: 競馬場×馬場種別×距離帯、道悪不問）
+        COUNT(*) OVER w_samed                             AS samed_runs_prior,
+        ROUND(1.0 * SUM(finish_position <= 3) OVER w_samed / COUNT(*) OVER w_samed, 3) AS samed_show_rate_prior,
+        ROUND(AVG(speed_index) OVER w_samed, 1)           AS samed_avg_speed_prior,
+        MAX(speed_index) OVER w_samed                     AS samed_best_speed_prior,
+        -- ① 同条件（緩め2: 競馬場×馬場種別、距離不問＝コース適性）
+        COUNT(*) OVER w_vs                                AS vs_runs_prior,
+        ROUND(1.0 * SUM(finish_position <= 3) OVER w_vs / COUNT(*) OVER w_vs, 3) AS vs_show_rate_prior,
+        ROUND(AVG(speed_index) OVER w_vs, 1)              AS vs_avg_speed_prior,
+        MAX(speed_index) OVER w_vs                        AS vs_best_speed_prior,
         -- ② 似た条件（回り×直線長×馬場種別×距離帯）の過去能力・成績
         COUNT(*) OVER w_sim                               AS sim_runs_prior,
         ROUND(1.0 * SUM(finish_position <= 3) OVER w_sim / COUNT(*) OVER w_sim, 3) AS sim_show_rate_prior,
@@ -291,6 +301,12 @@ base AS (
         -- ① 同条件: 競馬場×馬場種別×距離帯×道悪フラグ が一致する過去走のみ
         w_same   AS (PARTITION BY horse_id, venue_id, surface, dist_band, is_offtrack
                      ORDER BY race_date ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING),
+        -- ① 同条件（緩め1）: 道悪を問わない 競馬場×馬場種別×距離帯（サンプル増）
+        w_samed  AS (PARTITION BY horse_id, venue_id, surface, dist_band
+                     ORDER BY race_date ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING),
+        -- ① 同条件（緩め2）: 距離も問わない 競馬場×馬場種別（コース適性。最もサンプルが多い）
+        w_vs     AS (PARTITION BY horse_id, venue_id, surface
+                     ORDER BY race_date ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING),
         -- ② 似た条件: 回り×直線長×馬場種別×距離帯 が一致（例 東京⇔新潟=左・長直線）
         w_sim    AS (PARTITION BY horse_id, direction, straight_cat, surface, dist_band
                      ORDER BY race_date ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING),
@@ -335,6 +351,8 @@ SELECT
     dir_runs_prior, dir_show_rate_prior,                 -- 回り適性
     -- ① 同条件の能力（競馬場×馬場種別×距離帯×道悪）
     same_runs_prior, same_show_rate_prior, same_avg_speed_prior, same_best_speed_prior,
+    samed_runs_prior, samed_show_rate_prior, samed_avg_speed_prior, samed_best_speed_prior,
+    vs_runs_prior, vs_show_rate_prior, vs_avg_speed_prior, vs_best_speed_prior,
     same_avg_finish_prior, same_best_last3f_prior,
     -- ② 似た条件の能力（回り×直線長×馬場種別×距離帯 / 馬場種別×距離帯）
     sim_runs_prior, sim_show_rate_prior, sim_avg_speed_prior, sim_best_speed_prior,
