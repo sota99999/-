@@ -33,6 +33,9 @@ CONDITION_FEATURES = [
     "sd_runs_prior", "sd_avg_speed_prior", "sd_best_speed_prior",
     # ③ レース展開・ラップ（ペース推定・展開適合・脚質・瞬発力指標）
     "race_pace_estimate", "pace_fit", "run_style_prior", "best_last3f_prior", "field_size",
+    # ③ 展開・ラップ適性（瞬発力＝後傾実績 / 持続力＝前傾実績）
+    "shun_runs_prior", "shun_show_rate_prior", "shun_avg_speed_prior",
+    "mochi_runs_prior", "mochi_show_rate_prior", "mochi_avg_speed_prior",
 ]
 
 

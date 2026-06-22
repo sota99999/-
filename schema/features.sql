@@ -23,6 +23,7 @@
 --   標準偏差(sqrt)を使わず移植性を確保している。母数が少ないバケットは NULL。
 -- -----------------------------------------------------------------------------
 DROP VIEW IF EXISTS v_features;   -- v_speed/v_course_bias に依存するため先に落とす
+DROP VIEW IF EXISTS v_pace_ref;
 DROP VIEW IF EXISTS v_course_bias;
 DROP VIEW IF EXISTS v_speed;
 
@@ -31,6 +32,14 @@ DROP VIEW IF EXISTS v_speed;
 CREATE TABLE IF NOT EXISTS horse_ratings (
     race_id TEXT NOT NULL, horse_id TEXT NOT NULL,
     elo_before REAL, PRIMARY KEY (race_id, horse_id)
+);
+
+-- ラップ表が無くても v_features を作れるよう、空でも用意しておく
+-- （実データは scripts/collect_laps.py が投入する）
+CREATE TABLE IF NOT EXISTS race_laps (
+    race_id TEXT PRIMARY KEY, lap_seq TEXT, n_laps INTEGER,
+    first_half REAL, second_half REAL, race_first3f REAL,
+    race_last3f REAL, pace_diff REAL
 );
 
 CREATE VIEW v_speed AS
@@ -94,6 +103,26 @@ GROUP BY venue_id, surface, dist_band;
 
 
 -- -----------------------------------------------------------------------------
+-- v_pace_ref: 距離帯×馬場種別ごとの平均 pace_diff（前後傾の基準）
+--   pace_diff は短距離ほど前傾に偏るため、レースの「後傾(瞬発)/前傾(持続)」は
+--   この基準より上か下かで相対判定する（距離由来の偏りを除く）。
+-- -----------------------------------------------------------------------------
+CREATE VIEW v_pace_ref AS
+SELECT
+    ra.surface,
+    CASE WHEN ra.distance < 1400 THEN 'sprint'
+         WHEN ra.distance < 1800 THEN 'mile'
+         WHEN ra.distance < 2200 THEN 'mid'
+         ELSE 'long' END AS dist_band,
+    AVG(rl.pace_diff) AS avg_pace_diff,
+    COUNT(*) AS n
+FROM race_laps rl
+JOIN races ra ON rl.race_id = ra.race_id
+WHERE rl.pace_diff IS NOT NULL
+GROUP BY ra.surface, dist_band;
+
+
+-- -----------------------------------------------------------------------------
 -- v_features: 学習用 特徴量 + ターゲット
 --   raw（1行=1出走の素データ＋クラス格・Elo）→ base（過去走の窓集計）→
 --   外側（レース単位の展開ペース）の3段構成。集計は当該レースを除く窓でリーク防止。
@@ -146,12 +175,22 @@ WITH raw AS (
              THEN ROUND(cb.inner_bias * (0.5 - 1.0 * r.post_position / ra.field_size) * 2, 4)
              END AS draw_bias_fit,
         -- 直線の長さ区分（長い直線＝瞬発力勝負になりやすい。新潟/東京/中京=長い）
-        CASE WHEN ra.venue_id IN ('04','05','07') THEN 'long' ELSE 'short' END AS straight_cat
+        CASE WHEN ra.venue_id IN ('04','05','07') THEN 'long' ELSE 'short' END AS straight_cat,
+        -- そのレースのラップ性質: 同距離帯平均より後傾(=瞬発/上がり勝負)なら1, 前傾(=持続)なら0
+        CASE WHEN rl.pace_diff IS NULL OR pr.avg_pace_diff IS NULL THEN NULL
+             WHEN rl.pace_diff > pr.avg_pace_diff THEN 1 ELSE 0 END AS lap_back
     FROM results r
     JOIN races  ra ON r.race_id  = ra.race_id
     LEFT JOIN horses h ON r.horse_id = h.horse_id
     LEFT JOIN v_speed s ON s.race_id = r.race_id AND s.horse_id = r.horse_id
     LEFT JOIN horse_ratings hr ON hr.race_id = r.race_id AND hr.horse_id = r.horse_id
+    LEFT JOIN race_laps rl ON rl.race_id = r.race_id
+    LEFT JOIN v_pace_ref pr
+           ON pr.surface = ra.surface
+          AND pr.dist_band = CASE WHEN ra.distance < 1400 THEN 'sprint'
+                                  WHEN ra.distance < 1800 THEN 'mile'
+                                  WHEN ra.distance < 2200 THEN 'mid'
+                                  ELSE 'long' END
     LEFT JOIN v_course_bias cb
            ON cb.venue_id = ra.venue_id AND cb.surface = ra.surface
           AND cb.dist_band = CASE WHEN ra.distance < 1400 THEN 'sprint'
@@ -211,6 +250,16 @@ base AS (
         COUNT(*) OVER w_sd                                AS sd_runs_prior,
         ROUND(AVG(speed_index) OVER w_sd, 1)              AS sd_avg_speed_prior,
         MAX(speed_index) OVER w_sd                        AS sd_best_speed_prior,
+        -- ③ 瞬発力適性（後傾ラップ=上がり勝負だった過去走での成績・時計）
+        SUM(CASE WHEN lap_back = 1 THEN 1 ELSE 0 END) OVER w_hist AS shun_runs_prior,
+        ROUND(1.0 * SUM(CASE WHEN lap_back = 1 AND finish_position <= 3 THEN 1 ELSE 0 END) OVER w_hist
+              / NULLIF(SUM(CASE WHEN lap_back = 1 THEN 1 ELSE 0 END) OVER w_hist, 0), 3) AS shun_show_rate_prior,
+        ROUND(AVG(CASE WHEN lap_back = 1 THEN speed_index END) OVER w_hist, 1) AS shun_avg_speed_prior,
+        -- ③ 持続力適性（前傾ラップ=ロングスパートだった過去走での成績・時計）
+        SUM(CASE WHEN lap_back = 0 THEN 1 ELSE 0 END) OVER w_hist AS mochi_runs_prior,
+        ROUND(1.0 * SUM(CASE WHEN lap_back = 0 AND finish_position <= 3 THEN 1 ELSE 0 END) OVER w_hist
+              / NULLIF(SUM(CASE WHEN lap_back = 0 THEN 1 ELSE 0 END) OVER w_hist, 0), 3) AS mochi_show_rate_prior,
+        ROUND(AVG(CASE WHEN lap_back = 0 THEN speed_index END) OVER w_hist, 1) AS mochi_avg_speed_prior,
         -- 直近フォーム（直近3走の複勝率・平均着順、当該レースを除く）
         ROUND(1.0 * SUM(finish_position <= 3) OVER w_recent / COUNT(*) OVER w_recent, 3) AS recent3_show_rate,
         ROUND(AVG(finish_position) OVER w_recent, 2)      AS recent3_avg_finish,
@@ -290,6 +339,9 @@ SELECT
     -- ② 似た条件の能力（回り×直線長×馬場種別×距離帯 / 馬場種別×距離帯）
     sim_runs_prior, sim_show_rate_prior, sim_avg_speed_prior, sim_best_speed_prior,
     sd_runs_prior, sd_avg_speed_prior, sd_best_speed_prior,
+    -- ③ 展開・ラップ適性（瞬発力＝後傾実績 / 持続力＝前傾実績）
+    shun_runs_prior, shun_show_rate_prior, shun_avg_speed_prior,
+    mochi_runs_prior, mochi_show_rate_prior, mochi_avg_speed_prior,
     recent3_show_rate, recent3_avg_finish,               -- 直近3走フォーム
     prev_finish, prev_popularity, prev_surface, prev_distance, days_since_last, distance_change,
     -- ---- ローテーション（再収集不要・既存データから導出） ------------------

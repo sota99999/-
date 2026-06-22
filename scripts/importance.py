@@ -67,6 +67,10 @@ COL_CATEGORY = {
     # ③ 展開・ラップ
     "race_pace_estimate": "③展開・ラップ(ペース)", "pace_fit": "③展開・ラップ(ペース)",
     "run_style_prior": "③展開・ラップ(脚質)",
+    "shun_runs_prior": "③瞬発力適性", "shun_show_rate_prior": "③瞬発力適性",
+    "shun_avg_speed_prior": "③瞬発力適性",
+    "mochi_runs_prior": "③持続力適性", "mochi_show_rate_prior": "③持続力適性",
+    "mochi_avg_speed_prior": "③持続力適性",
     # 枠・バイアス
     "draw_ratio": "枠/バイアス", "draw_bias_fit": "枠/バイアス",
     "post_position": "枠/バイアス", "horse_number": "枠/バイアス",
