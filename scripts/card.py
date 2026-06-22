@@ -186,8 +186,9 @@ def assign_marks(g: pd.DataFrame, value_mode: bool, strength_col: str = "show_p"
       印は役割で付ける（◎○▲△で狙いが違う）:
         ◎ 的中重視 = 単勝確率(p)が最も高い「強い馬」（人気すぎは hon_min_odds で除外）。
         ○ 対抗     = ◎を除いて強さ(strength_col)が最も高い馬（的中の相手）。
-        ▲ 回収重視 = 残りの妙味馬(EV≧1)で期待値(ev)が最も高い馬（穴）。
-        △ どちらも = 残りの妙味馬(EV≧1)かつ強さ上位（中央値以上）の馬を最大3頭
+        ▲ 回収重視 = 妙味馬(EV≧1)かつ強さ上位（中央値以上）の中で期待値(ev)最大。
+                     （過大評価の大穴を避け、堅実な妙味で回収を狙う）
+        △ どちらも = 残りの妙味馬(EV≧1)かつ強さ上位の馬を強さ順に最大3頭
                      （的中と回収の両取り。頭数はレースで可変）。
       ※hon_mode="value" のときは◎も妙味(EV≧1)の中の単勝確率最上位にする。
     value_mode=False（全頭診断・オッズなし）:
@@ -220,18 +221,20 @@ def assign_marks(g: pd.DataFrame, value_mode: bool, strength_col: str = "show_p"
             taikou = sc_rem.idxmax()
             g.loc[taikou, "mark"] = "○"; used.append(taikou)
 
-        # ▲ 回収重視: 残りの妙味馬(EV≧1)で期待値最大（穴）
-        ov_rem = [i for i in g.index[overlay] if i not in used]
-        if ov_rem:
-            ana = ev.loc[ov_rem].idxmax()
-            g.loc[ana, "mark"] = "▲"; used.append(ana)
-
-        # △ どちらも: 残りの妙味馬(EV≧1) かつ 強さ上位(中央値以上)、最大3頭
+        # 妙味(EV≧1)かつ強さ上位(中央値以上)の馬＝回収のエンジン。▲△はここから選ぶ
         med = sc.median()
         both = [i for i in g.index[overlay]
                 if i not in used and pd.notna(sc.get(i)) and sc.get(i) >= med]
-        both.sort(key=lambda i: sc.get(i), reverse=True)
-        for i in both[:3]:
+
+        # ▲ 回収重視: bothプールで期待値最大（堅実な妙味）
+        if both:
+            ana = ev.loc[both].idxmax()
+            g.loc[ana, "mark"] = "▲"; used.append(ana)
+
+        # △ どちらも: 残りのbothプールを強さ順に最大3頭
+        rest_both = [i for i in both if i not in used]
+        rest_both.sort(key=lambda i: sc.get(i), reverse=True)
+        for i in rest_both[:3]:
             g.loc[i, "mark"] = "△"
 
         order = {"◎": 0, "○": 1, "▲": 2, "△": 3}
