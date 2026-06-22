@@ -85,7 +85,7 @@ def main(argv=None) -> int:
                    help="最終結論で印(妙味馬)を付ける単勝オッズ上限")
     p.add_argument("--hon-mode", choices=["strong", "value"], default="strong",
                    help="◎の選び方: strong=強い馬(人気すぎ除外/既定), value=妙味(穴)")
-    p.add_argument("--hon-min-odds", type=float, default=3.0,
+    p.add_argument("--hon-min-odds", type=float, default=1.0,
                    help="◎(strong時)の単勝オッズ下限。人気を背負いすぎた本命を除外")
     p.add_argument("--weights", help="能力重視リウェイトの比率（card と同じ書式）")
     p.add_argument("--lean", type=float, default=0.0,
