@@ -324,8 +324,8 @@ def main(argv=None) -> int:
     has_odds = pd.to_numeric(sub.get("odds"), errors="coerce").notna().any()
     strength_col = "show_p" if (args.mark_by == "show" and show_bundle) else "p"
 
-    # ★/〔評価〕用の z（調整後の p/show_p/ev と、表示する Elo/SP）
-    _add_race_z(sub, ["p", "show_p", "ev", "elo_before", "avg_speed_prior"]
+    # ★/〔評価〕用の z（調整後の p/show_p/ev と、表示する Elo/最高SP）
+    _add_race_z(sub, ["p", "show_p", "ev", "elo_before", "best_speed_prior"]
                 + [c for c, *_ in STRENGTH])
 
     def st(r, c):   # 突出値マーク（出走馬中で z>=1.5）
@@ -361,13 +361,13 @@ def main(argv=None) -> int:
             g = g.head(args.top)
         print(f"\n=== {rid}  {names.get(rid, '')} ===")
         print(f"{'印':<2}{'馬番':>3} {'馬名':<12}{'勝率':>7}{fuku_h} "
-              f"{'Elo':>6} {'平均SP':>7}{odds_h}")
+              f"{'Elo':>6} {'最高SP':>7}{odds_h}")
         for _, r in g.iterrows():
             mark = r["mark"] or "  "
             wr = _f(r['p'] * 100, '5.1f') + "%" + st(r, 'p')
             fuku = (" " + _f(r.get('show_p') * 100, '5.1f') + "%" + st(r, 'show_p')) if show_bundle else ""
             el = _f(r.get('elo_before'), '5.0f') + st(r, 'elo_before')
-            sp = _f(r.get('avg_speed_prior'), '5.1f') + st(r, 'avg_speed_prior')
+            sp = _f(r.get('best_speed_prior'), '5.1f') + st(r, 'best_speed_prior')
             odds = (" " + _f(r.get('odds'), '5.1f')
                     + " " + _f(r.get('ev'), '5.2f') + st(r, 'ev')) if has_odds else ""
             print(f"{mark:<2}{int(r['horse_number']):>3} {str(r['horse_name'])[:12]:<12}"
