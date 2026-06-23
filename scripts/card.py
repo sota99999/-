@@ -285,7 +285,7 @@ def main(argv=None) -> int:
                    help="最終結論で印(妙味馬)を付ける最低出走回数（能力未知馬を除外）")
     p.add_argument("--mark-max-odds", type=float, default=20.0,
                    help="◎の単勝オッズ上限（較正重視で堅め。大穴の過大評価を除外）")
-    p.add_argument("--sub-max-odds", type=float, default=None,
+    p.add_argument("--sub-max-odds", type=float, default=30.0,
                    help="○▲△の単勝オッズ上限（既定=◎と同じ。広げると穴の妙味を拾う）")
     p.add_argument("--hon-mode", choices=["strong", "value"], default="strong",
                    help="◎の選び方: strong=強い馬(人気すぎ除外/既定), value=妙味(穴)")
