@@ -42,6 +42,7 @@ COL_CATEGORY = {
     "same_runs_prior": "①同条件の能力", "same_show_rate_prior": "①同条件の能力",
     "same_wins_prior": "①同条件の能力", "samed_wins_prior": "①同条件の能力",
     "same_avg_speed_prior": "①同条件の能力", "same_best_speed_prior": "①同条件の能力",
+    "same_good_avg_speed_prior": "①同条件の能力", "vs_good_avg_speed_prior": "①同条件の能力",
     "same_avg_finish_prior": "①同条件の能力", "same_best_last3f_prior": "①同条件の能力",
     "samed_runs_prior": "①同条件の能力", "samed_show_rate_prior": "①同条件の能力",
     "samed_avg_speed_prior": "①同条件の能力", "samed_best_speed_prior": "①同条件の能力",
