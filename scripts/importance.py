@@ -50,6 +50,12 @@ COL_CATEGORY = {
     "xd_runs_prior": "①正確距離の能力", "xd_wins_prior": "①正確距離の能力",
     "xd_show_rate_prior": "①正確距離の能力", "xd_avg_speed_prior": "①正確距離の能力",
     "xd_best_speed_prior": "①正確距離の能力", "xd_good_avg_speed_prior": "①正確距離の能力",
+    "hill_runs_prior": "①坂適性", "hill_wins_prior": "①坂適性",
+    "hill_show_rate_prior": "①坂適性", "hill_best_speed_prior": "①坂適性",
+    "hill_good_avg_speed_prior": "①坂適性",
+    "io_runs_prior": "①内外適性", "io_wins_prior": "①内外適性",
+    "io_show_rate_prior": "①内外適性", "io_best_speed_prior": "①内外適性",
+    "io_good_avg_speed_prior": "①内外適性",
     "vs_runs_prior": "①同条件の能力", "vs_show_rate_prior": "①同条件の能力",
     "vs_avg_speed_prior": "①同条件の能力", "vs_best_speed_prior": "①同条件の能力",
     # ② 似た条件での能力

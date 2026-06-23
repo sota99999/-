@@ -38,6 +38,11 @@ CONDITION_FEATURES = [
     # ① 正確距離スペシャリスト（馬場種別×ちょうど同じ距離。距離帯では薄まる専門性）
     "xd_runs_prior", "xd_wins_prior", "xd_show_rate_prior",
     "xd_best_speed_prior", "xd_good_avg_speed_prior",
+    # ① 坂適性（急坂/緩坂/平坦＝パワー）／ 内外適性（内回り/外回り＝コース形態）
+    "hill_runs_prior", "hill_wins_prior", "hill_show_rate_prior",
+    "hill_best_speed_prior", "hill_good_avg_speed_prior",
+    "io_runs_prior", "io_wins_prior", "io_show_rate_prior",
+    "io_best_speed_prior", "io_good_avg_speed_prior",
     # ② 似た条件での能力（回り×直線長×馬場種別×距離帯 / 馬場種別×距離帯）
     "sim_runs_prior", "sim_show_rate_prior", "sim_best_speed_prior", "sim_good_avg_speed_prior",
     "sd_runs_prior", "sd_best_speed_prior", "sd_good_avg_speed_prior",
