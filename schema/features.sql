@@ -174,12 +174,16 @@ WITH raw AS (
         CASE WHEN cb.inner_bias IS NOT NULL AND cb.n >= 100 AND ra.field_size > 0
              THEN ROUND(cb.inner_bias * (0.5 - 1.0 * r.post_position / ra.field_size) * 2, 4)
              END AS draw_bias_fit,
-        -- 直線の長さ区分（長い直線＝瞬発力勝負になりやすい。新潟/東京/中京=長い）
-        CASE WHEN ra.venue_id IN ('04','05','07') THEN 'long' ELSE 'short' END AS straight_cat,
-        -- 坂区分: ゴール前の急坂の有無（パワー/坂適性）。中山06・中京07・阪神09=急坂、
-        --   東京05=長い緩坂、他=平坦（京都08・新潟04・札幌01・函館02・福島03・小倉10）
-        CASE WHEN ra.venue_id IN ('06','07','09') THEN 'steep'
-             WHEN ra.venue_id = '05' THEN 'mild'
+        -- 直線の長さ区分（長い直線＝瞬発力勝負/差し有利。②似た条件 sim_ のキーに使う）
+        --   常に長い: 新潟04・東京05・中京07 ／ 外回りが長い: 阪神09外・京都08外
+        CASE WHEN ra.venue_id IN ('04','05','07') THEN 'long'
+             WHEN ra.venue_id='09' AND ra.distance IN (1600,1800) THEN 'long'        -- 阪神外回り
+             WHEN ra.venue_id='08' AND ra.distance IN (1800,2200,2400,3200) THEN 'long' -- 京都外回り
+             ELSE 'short' END AS straight_cat,
+        -- 坂区分: ゴール前の坂（パワー適性）。中山06・阪神09・中京07=急坂、
+        --   東京05・福島03=直線に坂（緩い）、他=平坦（京都08・新潟04・小倉10・函館02・札幌01）
+        CASE WHEN ra.venue_id IN ('06','09','07') THEN 'steep'
+             WHEN ra.venue_id IN ('05','03') THEN 'mild'
              ELSE 'flat' END AS hill_type,
         -- 内回り/外回り区分（芝のみ。確実な距離だけ内/外を判定し、不確実は other=通常）
         --   ダートは内外区別なしで dirt。誤ラベルを避けるため曖昧な距離は other に倒す
@@ -193,6 +197,14 @@ WITH raw AS (
              WHEN ra.venue_id='04' AND ra.distance = 1200 THEN 'inner'                    -- 新潟
              WHEN ra.venue_id='04' AND ra.distance IN (1400,1600,1800) THEN 'outer'
              ELSE 'other' END AS io_type,
+        -- 小回り/広いコース区分（コーナーがタイト＝先行/器用さ有利）。
+        --   小回り: 札幌01・函館02・福島03・小倉10（全体が小回り）＋主要4場の内回り
+        CASE WHEN ra.venue_id IN ('01','02','03','10') THEN 'tight'
+             WHEN ra.venue_id='06' AND ra.distance IN (1800,2000,2500,3600) THEN 'tight'  -- 中山内
+             WHEN ra.venue_id='08' AND ra.distance IN (1100,1200,2000,3000) THEN 'tight'  -- 京都内
+             WHEN ra.venue_id='09' AND ra.distance IN (1200,1400,2000,2200,2400,3000) THEN 'tight' -- 阪神内
+             WHEN ra.venue_id='04' AND ra.distance = 1200 THEN 'tight'                    -- 新潟内
+             ELSE 'wide' END AS turn_type,
         -- そのレースのラップ性質: 同距離帯平均より後傾(=瞬発/上がり勝負)なら1, 前傾(=持続)なら0
         CASE WHEN rl.pace_diff IS NULL OR pr.avg_pace_diff IS NULL THEN NULL
              WHEN rl.pace_diff > pr.avg_pace_diff THEN 1 ELSE 0 END AS lap_back
@@ -286,6 +298,12 @@ base AS (
         ROUND(1.0 * SUM(finish_position <= 3) OVER w_io / COUNT(*) OVER w_io, 3) AS io_show_rate_prior,
         MAX(speed_index) OVER w_io                       AS io_best_speed_prior,
         ROUND(AVG(CASE WHEN finish_position <= 3 THEN speed_index END) OVER w_io, 1) AS io_good_avg_speed_prior,
+        -- ① 小回り適性（馬場種別×小回り/広い。器用さ・先行力）
+        COUNT(*) OVER w_turn                             AS turn_runs_prior,
+        SUM(finish_position = 1) OVER w_turn            AS turn_wins_prior,
+        ROUND(1.0 * SUM(finish_position <= 3) OVER w_turn / COUNT(*) OVER w_turn, 3) AS turn_show_rate_prior,
+        MAX(speed_index) OVER w_turn                     AS turn_best_speed_prior,
+        ROUND(AVG(CASE WHEN finish_position <= 3 THEN speed_index END) OVER w_turn, 1) AS turn_good_avg_speed_prior,
         -- ① 同条件（緩め2: 競馬場×馬場種別、距離不問＝コース適性）
         COUNT(*) OVER w_vs                                AS vs_runs_prior,
         ROUND(1.0 * SUM(finish_position <= 3) OVER w_vs / COUNT(*) OVER w_vs, 3) AS vs_show_rate_prior,
@@ -365,6 +383,9 @@ base AS (
         -- ① 内外適性: 馬場種別×内外区分（内/外）が一致する過去走（コース形態適性）
         w_io     AS (PARTITION BY horse_id, surface, io_type
                      ORDER BY race_date ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING),
+        -- ① 小回り適性: 馬場種別×小回り/広い が一致する過去走（器用さ・先行力）
+        w_turn   AS (PARTITION BY horse_id, surface, turn_type
+                     ORDER BY race_date ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING),
         -- 直近3走（現在行の直前3走）
         w_recent AS (PARTITION BY horse_id ORDER BY race_date
                      ROWS BETWEEN 3 PRECEDING AND 1 PRECEDING)
@@ -410,6 +431,7 @@ SELECT
     xd_good_avg_speed_prior,
     hill_runs_prior, hill_wins_prior, hill_show_rate_prior, hill_best_speed_prior, hill_good_avg_speed_prior,
     io_runs_prior, io_wins_prior, io_show_rate_prior, io_best_speed_prior, io_good_avg_speed_prior,
+    turn_runs_prior, turn_wins_prior, turn_show_rate_prior, turn_best_speed_prior, turn_good_avg_speed_prior,
     vs_runs_prior, vs_show_rate_prior, vs_avg_speed_prior, vs_best_speed_prior, vs_good_avg_speed_prior,
     same_avg_finish_prior, same_best_last3f_prior,
     -- ② 似た条件の能力（回り×直線長×馬場種別×距離帯 / 馬場種別×距離帯）
