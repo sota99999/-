@@ -116,6 +116,7 @@ SELECT
          WHEN ra.distance < 2200 THEN 'mid'
          ELSE 'long' END AS dist_band,
     AVG(rl.pace_diff) AS avg_pace_diff,
+    AVG(rl.race_first3f) AS avg_first3f,
     COUNT(*) AS n
 FROM race_laps rl
 JOIN races ra ON rl.race_id = ra.race_id
@@ -225,7 +226,13 @@ WITH raw AS (
                   THEN 0 ELSE 1 END AS is_transport,
         -- そのレースのラップ性質: 同距離帯平均より後傾(=瞬発/上がり勝負)なら1, 前傾(=持続)なら0
         CASE WHEN rl.pace_diff IS NULL OR pr.avg_pace_diff IS NULL THEN NULL
-             WHEN rl.pace_diff > pr.avg_pace_diff THEN 1 ELSE 0 END AS lap_back
+             WHEN rl.pace_diff > pr.avg_pace_diff THEN 1 ELSE 0 END AS lap_back,
+        -- ペースの速さ区分: 前半3F(600m)が同距離帯平均より速ければハイ、遅ければスロー。
+        --   「流れ(瞬発/持続=lap_back)」とは独立の軸（スロー×持続=ロングスパートも有り得る）
+        CASE WHEN rl.race_first3f IS NULL OR pr.avg_first3f IS NULL THEN NULL
+             WHEN rl.race_first3f <= pr.avg_first3f - 0.6 THEN 'high'
+             WHEN rl.race_first3f >= pr.avg_first3f + 0.6 THEN 'slow'
+             ELSE 'mid' END AS pace_level
     FROM results r
     JOIN races  ra ON r.race_id  = ra.race_id
     LEFT JOIN horses h ON r.horse_id = h.horse_id
@@ -354,6 +361,13 @@ base AS (
         ROUND(1.0 * SUM(CASE WHEN lap_back = 0 AND finish_position <= 3 THEN 1 ELSE 0 END) OVER w_hist
               / NULLIF(SUM(CASE WHEN lap_back = 0 THEN 1 ELSE 0 END) OVER w_hist, 0), 3) AS mochi_show_rate_prior,
         ROUND(AVG(CASE WHEN lap_back = 0 THEN speed_index END) OVER w_hist, 1) AS mochi_avg_speed_prior,
+        -- ③ ペースの速さ適性（過去のスロー/ハイ ペース戦での好走率＝流れの速さへの強さ）
+        SUM(CASE WHEN pace_level = 'slow' THEN 1 ELSE 0 END) OVER w_hist AS slowp_runs_prior,
+        ROUND(1.0 * SUM(CASE WHEN pace_level = 'slow' AND finish_position <= 3 THEN 1 ELSE 0 END) OVER w_hist
+              / NULLIF(SUM(CASE WHEN pace_level = 'slow' THEN 1 ELSE 0 END) OVER w_hist, 0), 3) AS slowp_show_rate_prior,
+        SUM(CASE WHEN pace_level = 'high' THEN 1 ELSE 0 END) OVER w_hist AS highp_runs_prior,
+        ROUND(1.0 * SUM(CASE WHEN pace_level = 'high' AND finish_position <= 3 THEN 1 ELSE 0 END) OVER w_hist
+              / NULLIF(SUM(CASE WHEN pace_level = 'high' THEN 1 ELSE 0 END) OVER w_hist, 0), 3) AS highp_show_rate_prior,
         -- 直近フォーム（直近3走の複勝率・平均着順、当該レースを除く）
         ROUND(1.0 * SUM(finish_position <= 3) OVER w_recent / COUNT(*) OVER w_recent, 3) AS recent3_show_rate,
         ROUND(AVG(finish_position) OVER w_recent, 2)      AS recent3_avg_finish,
@@ -467,6 +481,7 @@ SELECT
     -- ③ 展開・ラップ適性（瞬発力＝後傾実績 / 持続力＝前傾実績）
     shun_runs_prior, shun_show_rate_prior, shun_avg_speed_prior,
     mochi_runs_prior, mochi_show_rate_prior, mochi_avg_speed_prior,
+    slowp_runs_prior, slowp_show_rate_prior, highp_runs_prior, highp_show_rate_prior,  -- ペース速さ適性(参照)
     recent3_show_rate, recent3_avg_finish,               -- 直近3走フォーム
     prev_finish, prev_popularity, prev_surface, prev_distance, days_since_last, distance_change,
     -- ---- ローテーション（再収集不要・既存データから導出） ------------------

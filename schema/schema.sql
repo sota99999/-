@@ -153,7 +153,7 @@ CREATE TABLE IF NOT EXISTS race_laps (
     second_half REAL,      -- 後半の合計秒
     race_first3f REAL,     -- レース前半3F(600m)合計秒
     race_last3f  REAL,     -- レース上がり3F(600m)合計秒
-    pace_diff   REAL       -- 前半1F平均 - 後半1F平均（正=前傾/持続, 負=後傾/瞬発）
+    pace_diff   REAL       -- 前半1F平均 - 後半1F平均（正=後傾/瞬発・上がり勝負, 負=前傾/持続・ロングスパート）
 );
 
 -- =============================================================================
