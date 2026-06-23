@@ -281,7 +281,7 @@ def main(argv=None) -> int:
     p.add_argument("--race-id", help="このレースだけ")
     p.add_argument("--date", help="この開催日の全レース (YYYY-MM-DD)")
     p.add_argument("--top", type=int, default=0, help="上位何頭まで表示（0=全頭）")
-    p.add_argument("--mark-min-runs", type=int, default=3,
+    p.add_argument("--mark-min-runs", type=int, default=2,
                    help="最終結論で印(妙味馬)を付ける最低出走回数（能力未知馬を除外）")
     p.add_argument("--mark-max-odds", type=float, default=20.0,
                    help="◎の単勝オッズ上限（較正重視で堅め。大穴の過大評価を除外）")

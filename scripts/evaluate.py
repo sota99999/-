@@ -79,7 +79,7 @@ def main(argv=None) -> int:
     p.add_argument("--to", dest="date_to", help="終了日 (YYYY-MM-DD)")
     p.add_argument("--mark-by", choices=["show", "win"], default="show",
                    help="全頭診断(オッズ無)の強さ順の基準: show=複勝率(既定), win=勝率")
-    p.add_argument("--mark-min-runs", type=int, default=3,
+    p.add_argument("--mark-min-runs", type=int, default=2,
                    help="最終結論で印(妙味馬)を付ける最低出走回数")
     p.add_argument("--mark-max-odds", type=float, default=20.0,
                    help="◎の単勝オッズ上限（較正重視で堅め）")
