@@ -25,6 +25,7 @@
 DROP VIEW IF EXISTS v_features;   -- v_speed/v_course_bias に依存するため先に落とす
 DROP VIEW IF EXISTS v_pace_ref;
 DROP VIEW IF EXISTS v_course_bias;
+DROP VIEW IF EXISTS v_trainer_region;
 DROP VIEW IF EXISTS v_speed;
 
 -- Eloレーティング表が無くても v_features を作れるよう、空でも用意しておく
@@ -123,6 +124,21 @@ GROUP BY ra.surface, dist_band;
 
 
 -- -----------------------------------------------------------------------------
+-- v_trainer_region: 調教師の東西所属を出走分布から推定（西=中京07/京都08/阪神09/小倉10）
+--   trainers.affiliation(美浦/栗東)が未取得のため、その厩舎の全出走の東西多数決で代用。
+--   栗東所属は西開催に集中するので実用上ほぼ正確。輸送(遠征)判定に使う。
+-- -----------------------------------------------------------------------------
+CREATE VIEW v_trainer_region AS
+SELECT r.trainer_id,
+       CASE WHEN SUM(CASE WHEN ra.venue_id IN ('07','08','09','10') THEN 1 ELSE 0 END)
+                 > SUM(CASE WHEN ra.venue_id IN ('01','02','03','04','05','06') THEN 1 ELSE 0 END)
+            THEN 'West' ELSE 'East' END AS region
+FROM results r
+JOIN races ra ON ra.race_id = r.race_id
+WHERE r.trainer_id IS NOT NULL
+GROUP BY r.trainer_id;
+
+-- -----------------------------------------------------------------------------
 -- v_features: 学習用 特徴量 + ターゲット
 --   raw（1行=1出走の素データ＋クラス格・Elo）→ base（過去走の窓集計）→
 --   外側（レース単位の展開ペース）の3段構成。集計は当該レースを除く窓でリーク防止。
@@ -174,12 +190,9 @@ WITH raw AS (
         CASE WHEN cb.inner_bias IS NOT NULL AND cb.n >= 100 AND ra.field_size > 0
              THEN ROUND(cb.inner_bias * (0.5 - 1.0 * r.post_position / ra.field_size) * 2, 4)
              END AS draw_bias_fit,
-        -- 直線の長さ区分（長い直線＝瞬発力勝負/差し有利。②似た条件 sim_ のキーに使う）
-        --   常に長い: 新潟04・東京05・中京07 ／ 外回りが長い: 阪神09外・京都08外
-        CASE WHEN ra.venue_id IN ('04','05','07') THEN 'long'
-             WHEN ra.venue_id='09' AND ra.distance IN (1600,1800) THEN 'long'        -- 阪神外回り
-             WHEN ra.venue_id='08' AND ra.distance IN (1800,2200,2400,3200) THEN 'long' -- 京都外回り
-             ELSE 'short' END AS straight_cat,
+        -- 直線の長さ区分（②似た条件 sim_ のキー）。京都外/阪神外も実際は長いが、
+        --   検証で旧定義(新潟04・東京05・中京07のみ)の方が◎軸が良かったため旧定義を採用。
+        CASE WHEN ra.venue_id IN ('04','05','07') THEN 'long' ELSE 'short' END AS straight_cat,
         -- 坂区分: ゴール前の坂（パワー適性）。中山06・阪神09・中京07=急坂、
         --   東京05・福島03=直線に坂（緩い）、他=平坦（京都08・新潟04・小倉10・函館02・札幌01）
         CASE WHEN ra.venue_id IN ('06','09','07') THEN 'steep'
@@ -205,12 +218,18 @@ WITH raw AS (
              WHEN ra.venue_id='09' AND ra.distance IN (1200,1400,2000,2200,2400,3000) THEN 'tight' -- 阪神内
              WHEN ra.venue_id='04' AND ra.distance = 1200 THEN 'tight'                    -- 新潟内
              ELSE 'wide' END AS turn_type,
+        -- 輸送（遠征）フラグ: レースの東西と調教師の所属東西が違えば1（遠征＝輸送あり）。
+        --   西開催=中京07/京都08/阪神09/小倉10、他=東。所属不明(NULL)の厩舎は0扱い。
+        CASE WHEN tr.region IS NULL THEN 0
+             WHEN tr.region = (CASE WHEN ra.venue_id IN ('07','08','09','10') THEN 'West' ELSE 'East' END)
+                  THEN 0 ELSE 1 END AS is_transport,
         -- そのレースのラップ性質: 同距離帯平均より後傾(=瞬発/上がり勝負)なら1, 前傾(=持続)なら0
         CASE WHEN rl.pace_diff IS NULL OR pr.avg_pace_diff IS NULL THEN NULL
              WHEN rl.pace_diff > pr.avg_pace_diff THEN 1 ELSE 0 END AS lap_back
     FROM results r
     JOIN races  ra ON r.race_id  = ra.race_id
     LEFT JOIN horses h ON r.horse_id = h.horse_id
+    LEFT JOIN v_trainer_region tr ON tr.trainer_id = r.trainer_id
     LEFT JOIN v_speed s ON s.race_id = r.race_id AND s.horse_id = r.horse_id
     LEFT JOIN horse_ratings hr ON hr.race_id = r.race_id AND hr.horse_id = r.horse_id
     LEFT JOIN race_laps rl ON rl.race_id = r.race_id
@@ -304,6 +323,10 @@ base AS (
         ROUND(1.0 * SUM(finish_position <= 3) OVER w_turn / COUNT(*) OVER w_turn, 3) AS turn_show_rate_prior,
         MAX(speed_index) OVER w_turn                     AS turn_best_speed_prior,
         ROUND(AVG(CASE WHEN finish_position <= 3 THEN speed_index END) OVER w_turn, 1) AS turn_good_avg_speed_prior,
+        -- ① 輸送適性（輸送有無が同じ過去走＝遠征時にどれだけ走れるか）
+        COUNT(*) OVER w_trans                            AS trans_runs_prior,
+        ROUND(1.0 * SUM(finish_position <= 3) OVER w_trans / COUNT(*) OVER w_trans, 3) AS trans_show_rate_prior,
+        MAX(speed_index) OVER w_trans                    AS trans_best_speed_prior,
         -- ① 同条件（緩め2: 競馬場×馬場種別、距離不問＝コース適性）
         COUNT(*) OVER w_vs                                AS vs_runs_prior,
         ROUND(1.0 * SUM(finish_position <= 3) OVER w_vs / COUNT(*) OVER w_vs, 3) AS vs_show_rate_prior,
@@ -386,6 +409,9 @@ base AS (
         -- ① 小回り適性: 馬場種別×小回り/広い が一致する過去走（器用さ・先行力）
         w_turn   AS (PARTITION BY horse_id, surface, turn_type
                      ORDER BY race_date ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING),
+        -- ① 輸送適性: 輸送有無が一致する過去走（遠征時の好走耐性）
+        w_trans  AS (PARTITION BY horse_id, is_transport
+                     ORDER BY race_date ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING),
         -- 直近3走（現在行の直前3走）
         w_recent AS (PARTITION BY horse_id ORDER BY race_date
                      ROWS BETWEEN 3 PRECEDING AND 1 PRECEDING)
@@ -432,6 +458,7 @@ SELECT
     hill_runs_prior, hill_wins_prior, hill_show_rate_prior, hill_best_speed_prior, hill_good_avg_speed_prior,
     io_runs_prior, io_wins_prior, io_show_rate_prior, io_best_speed_prior, io_good_avg_speed_prior,
     turn_runs_prior, turn_wins_prior, turn_show_rate_prior, turn_best_speed_prior, turn_good_avg_speed_prior,
+    is_transport, trans_runs_prior, trans_show_rate_prior, trans_best_speed_prior,
     vs_runs_prior, vs_show_rate_prior, vs_avg_speed_prior, vs_best_speed_prior, vs_good_avg_speed_prior,
     same_avg_finish_prior, same_best_last3f_prior,
     -- ② 似た条件の能力（回り×直線長×馬場種別×距離帯 / 馬場種別×距離帯）
