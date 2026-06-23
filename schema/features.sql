@@ -472,6 +472,7 @@ SELECT
     hill_runs_prior, hill_wins_prior, hill_show_rate_prior, hill_best_speed_prior, hill_good_avg_speed_prior,
     io_runs_prior, io_wins_prior, io_show_rate_prior, io_best_speed_prior, io_good_avg_speed_prior,
     turn_runs_prior, turn_wins_prior, turn_show_rate_prior, turn_best_speed_prior, turn_good_avg_speed_prior,
+    hill_type, io_type, turn_type,                       -- 今日のコース区分（タグ表示用）
     is_transport, trans_runs_prior, trans_show_rate_prior, trans_best_speed_prior,
     vs_runs_prior, vs_show_rate_prior, vs_avg_speed_prior, vs_best_speed_prior, vs_good_avg_speed_prior,
     same_avg_finish_prior, same_best_last3f_prior,

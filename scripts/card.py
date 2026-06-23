@@ -332,8 +332,11 @@ def main(argv=None) -> int:
     strength_col = "show_p" if (args.mark_by == "show" and show_bundle) else "p"
 
     # ★/〔評価〕用の z（調整後の p/show_p/ev と、表示する Elo/最高SP）
+    fit_cols = ["hill_show_rate_prior", "io_show_rate_prior", "turn_show_rate_prior",
+                "trans_show_rate_prior", "slowp_show_rate_prior", "highp_show_rate_prior",
+                "shun_show_rate_prior", "mochi_show_rate_prior"]
     _add_race_z(sub, ["p", "show_p", "ev", "elo_before", "best_speed_prior"]
-                + [c for c, *_ in STRENGTH])
+                + [c for c, *_ in STRENGTH] + fit_cols)
 
     def st(r, c):   # 突出値マーク（出走馬中で z>=1.5）
         return "★" if r.get(c + "_z", 0) >= 1.5 else ""
@@ -355,6 +358,35 @@ def main(argv=None) -> int:
         if (r.get("runs_prior") or 0) >= 3 and (r.get("recent3_show_rate") or 0) == 0:
             out.append("近走▼")
         return out
+
+    HILL_JP = {"steep": "急坂", "mild": "坂"}        # 平坦は省略（坂のある所だけ強調）
+    IO_JP = {"inner": "内回り", "outer": "外回り"}
+    TURN_JP = {"tight": "小回り"}
+
+    def _apt(r, col, gate, minr, label):  # 適性タグ: 他馬比較で得意◎/苦手▼
+        if col not in sub.columns or pd.isna(r.get(col)) or (r.get(gate) or 0) < minr:
+            return None
+        z = r.get(col + "_z", 0)
+        return f"{label}◎" if z >= 1.0 else (f"{label}▼" if z <= -1.0 else None)
+
+    def course_fit(r):  # 今日のコース/ペースへの適性（坂・内外・小回り・遠征・流れ）
+        tags = []
+        if r.get("hill_type") in HILL_JP:
+            tags.append(_apt(r, "hill_show_rate_prior", "hill_runs_prior", 2, HILL_JP[r["hill_type"]]))
+        if r.get("io_type") in IO_JP:
+            tags.append(_apt(r, "io_show_rate_prior", "io_runs_prior", 2, IO_JP[r["io_type"]]))
+        if r.get("turn_type") in TURN_JP:
+            tags.append(_apt(r, "turn_show_rate_prior", "turn_runs_prior", 2, TURN_JP[r["turn_type"]]))
+        if (r.get("is_transport") or 0) == 1:
+            tags.append(_apt(r, "trans_show_rate_prior", "trans_runs_prior", 2, "遠征"))
+        for col, gate, lab in [("slowp_show_rate_prior", "slowp_runs_prior", "スロー巧者"),
+                               ("highp_show_rate_prior", "highp_runs_prior", "ハイ巧者"),
+                               ("shun_show_rate_prior", "shun_runs_prior", "瞬発"),
+                               ("mochi_show_rate_prior", "mochi_runs_prior", "持続")]:
+            t = _apt(r, col, gate, 2, lab)
+            if t and t.endswith("◎"):     # 流れ/ペースは"得意"だけ拾う
+                tags.append(t)
+        return [t for t in tags if t][:4]
 
     fuku_h = f"{'複勝率':>7}" if show_bundle else ""
     odds_h = f"{'オッズ':>6}{'EV':>7}" if has_odds else ""   # オッズあり最終結論時のみ
@@ -388,6 +420,14 @@ def main(argv=None) -> int:
                 lines.append(f"{r['mark']}{str(r['horse_name'])[:7]}: {'・'.join(tags)}")
         if lines:
             print("  〔評価〕 " + " ｜ ".join(lines))
+        # 〔適性〕今日のコース・ペースへの得意/苦手（坂/内外/小回り/遠征/流れ）
+        flines = []
+        for _, r in g[g["mark"] != ""].head(5).iterrows():
+            ft = course_fit(r)
+            if ft:
+                flines.append(f"{r['mark']}{str(r['horse_name'])[:7]}: {'・'.join(ft)}")
+        if flines:
+            print("  〔適性〕 " + " ｜ ".join(flines))
 
     if has_odds:
         mark_rule = ("印=役割別。◎=的中・複勝軸（20倍以内で最も強い馬）、"
