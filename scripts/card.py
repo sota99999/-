@@ -428,6 +428,16 @@ def main(argv=None) -> int:
                 flines.append(f"{r['mark']}{str(r['horse_name'])[:7]}: {'・'.join(ft)}")
         if flines:
             print("  〔適性〕 " + " ｜ ".join(flines))
+        # 〔穴〕無印だが天井(最高SP)が出走馬中で突出＝モデルが軽視するスペシャリスト候補
+        ana = []
+        for _, r in g[g["mark"] == ""].iterrows():
+            if r.get("best_speed_prior_z", 0) >= 1.0:
+                ft = course_fit(r)
+                sp = _f(r.get("best_speed_prior"), '.0f')
+                tag = "・" + "・".join(ft) if ft else ""
+                ana.append(f"{int(r['horse_number'])}{str(r['horse_name'])[:7]}(天井SP{sp}{tag})")
+        if ana:
+            print("  〔穴〕 " + " ｜ ".join(ana[:4]))
 
     if has_odds:
         mark_rule = ("印=役割別。◎=的中・複勝軸（20倍以内で最も強い馬）、"
