@@ -438,6 +438,24 @@ def main(argv=None) -> int:
                 ana.append(f"{int(r['horse_number'])}{str(r['horse_name'])[:7]}(天井SP{sp}{tag})")
         if ana:
             print("  〔穴〕 " + " ｜ ".join(ana[:4]))
+        # 〔市場〕オッズ最上位＝市場の本命。1番人気は複勝率66%と堅実なので、
+        #   モデルが軽視(複勝率が場内6位以下)していても無視しないための安全弁。
+        if has_odds:
+            od = pd.to_numeric(g.get("odds"), errors="coerce")
+            favs = g[od.notna()].assign(_o=od).nsmallest(2, "_o")
+            mline = []
+            for _, r in favs.iterrows():
+                sp = r.get("show_p")
+                fu = f"/複{_f(sp * 100, '.0f')}%" if show_bundle and pd.notna(sp) else ""
+                flag = ""
+                if show_bundle and pd.notna(sp):
+                    rank = int((pd.to_numeric(g["show_p"], errors="coerce") > sp).sum()) + 1
+                    if rank > 5:
+                        flag = "（モデル軽視・割引注意）"
+                mline.append(f"{int(r['horse_number'])}{str(r['horse_name'])[:7]}"
+                             f"({_f(r.get('odds'), '.1f')}倍{fu}){flag}")
+            if mline:
+                print("  〔市場〕 " + " ｜ ".join(mline))
 
     if has_odds:
         mark_rule = ("印=役割別。◎=的中・複勝軸（20倍以内で最も強い馬）、"
