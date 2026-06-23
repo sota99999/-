@@ -45,16 +45,18 @@ COL_CATEGORY = {
     "same_avg_finish_prior": "①同条件の能力", "same_best_last3f_prior": "①同条件の能力",
     "samed_runs_prior": "①同条件の能力", "samed_show_rate_prior": "①同条件の能力",
     "samed_avg_speed_prior": "①同条件の能力", "samed_best_speed_prior": "①同条件の能力",
+    "samed_good_avg_speed_prior": "①同条件の能力",
     "xd_runs_prior": "①正確距離の能力", "xd_wins_prior": "①正確距離の能力",
     "xd_show_rate_prior": "①正確距離の能力", "xd_avg_speed_prior": "①正確距離の能力",
-    "xd_best_speed_prior": "①正確距離の能力",
+    "xd_best_speed_prior": "①正確距離の能力", "xd_good_avg_speed_prior": "①正確距離の能力",
     "vs_runs_prior": "①同条件の能力", "vs_show_rate_prior": "①同条件の能力",
     "vs_avg_speed_prior": "①同条件の能力", "vs_best_speed_prior": "①同条件の能力",
     # ② 似た条件での能力
     "sim_runs_prior": "②似た条件の能力", "sim_show_rate_prior": "②似た条件の能力",
     "sim_avg_speed_prior": "②似た条件の能力", "sim_best_speed_prior": "②似た条件の能力",
+    "sim_good_avg_speed_prior": "②似た条件の能力",
     "sd_runs_prior": "②似た条件の能力", "sd_avg_speed_prior": "②似た条件の能力",
-    "sd_best_speed_prior": "②似た条件の能力",
+    "sd_best_speed_prior": "②似た条件の能力", "sd_good_avg_speed_prior": "②似た条件の能力",
     # ③ レース展開・ラップ（瞬発力指標の上り3Fもここ）
     "best_last3f_prior": "③展開・ラップ(瞬発力)",
     # クラス

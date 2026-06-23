@@ -248,12 +248,14 @@ base AS (
         ROUND(1.0 * SUM(finish_position <= 3) OVER w_samed / COUNT(*) OVER w_samed, 3) AS samed_show_rate_prior,
         ROUND(AVG(speed_index) OVER w_samed, 1)           AS samed_avg_speed_prior,
         MAX(speed_index) OVER w_samed                     AS samed_best_speed_prior,
+        ROUND(AVG(CASE WHEN finish_position <= 3 THEN speed_index END) OVER w_samed, 1) AS samed_good_avg_speed_prior,
         -- ① 正確距離スペシャリスト（馬場種別×ちょうど同じ距離、競馬場不問）
         COUNT(*) OVER w_xd                               AS xd_runs_prior,
         SUM(finish_position = 1) OVER w_xd               AS xd_wins_prior,
         ROUND(1.0 * SUM(finish_position <= 3) OVER w_xd / COUNT(*) OVER w_xd, 3) AS xd_show_rate_prior,
         ROUND(AVG(speed_index) OVER w_xd, 1)             AS xd_avg_speed_prior,
         MAX(speed_index) OVER w_xd                       AS xd_best_speed_prior,
+        ROUND(AVG(CASE WHEN finish_position <= 3 THEN speed_index END) OVER w_xd, 1) AS xd_good_avg_speed_prior,
         -- ① 同条件（緩め2: 競馬場×馬場種別、距離不問＝コース適性）
         COUNT(*) OVER w_vs                                AS vs_runs_prior,
         ROUND(1.0 * SUM(finish_position <= 3) OVER w_vs / COUNT(*) OVER w_vs, 3) AS vs_show_rate_prior,
@@ -264,10 +266,12 @@ base AS (
         ROUND(1.0 * SUM(finish_position <= 3) OVER w_sim / COUNT(*) OVER w_sim, 3) AS sim_show_rate_prior,
         ROUND(AVG(speed_index) OVER w_sim, 1)             AS sim_avg_speed_prior,
         MAX(speed_index) OVER w_sim                       AS sim_best_speed_prior,
+        ROUND(AVG(CASE WHEN finish_position <= 3 THEN speed_index END) OVER w_sim, 1) AS sim_good_avg_speed_prior,
         -- ② 馬場種別×距離帯（控えのベース能力。同/似条件が無い馬の下支え）
         COUNT(*) OVER w_sd                                AS sd_runs_prior,
         ROUND(AVG(speed_index) OVER w_sd, 1)              AS sd_avg_speed_prior,
         MAX(speed_index) OVER w_sd                        AS sd_best_speed_prior,
+        ROUND(AVG(CASE WHEN finish_position <= 3 THEN speed_index END) OVER w_sd, 1) AS sd_good_avg_speed_prior,
         -- ③ 瞬発力適性（後傾ラップ=上がり勝負だった過去走での成績・時計）
         SUM(CASE WHEN lap_back = 1 THEN 1 ELSE 0 END) OVER w_hist AS shun_runs_prior,
         ROUND(1.0 * SUM(CASE WHEN lap_back = 1 AND finish_position <= 3 THEN 1 ELSE 0 END) OVER w_hist
@@ -363,12 +367,14 @@ SELECT
     -- ① 同条件の能力（競馬場×馬場種別×距離帯×道悪）。*_wins_prior=同条件での勝利数
     same_runs_prior, same_wins_prior, same_show_rate_prior, same_avg_speed_prior, same_best_speed_prior,
     samed_runs_prior, samed_wins_prior, samed_show_rate_prior, samed_avg_speed_prior, samed_best_speed_prior,
+    samed_good_avg_speed_prior,
     xd_runs_prior, xd_wins_prior, xd_show_rate_prior, xd_avg_speed_prior, xd_best_speed_prior,
+    xd_good_avg_speed_prior,
     vs_runs_prior, vs_show_rate_prior, vs_avg_speed_prior, vs_best_speed_prior,
     same_avg_finish_prior, same_best_last3f_prior,
     -- ② 似た条件の能力（回り×直線長×馬場種別×距離帯 / 馬場種別×距離帯）
-    sim_runs_prior, sim_show_rate_prior, sim_avg_speed_prior, sim_best_speed_prior,
-    sd_runs_prior, sd_avg_speed_prior, sd_best_speed_prior,
+    sim_runs_prior, sim_show_rate_prior, sim_avg_speed_prior, sim_best_speed_prior, sim_good_avg_speed_prior,
+    sd_runs_prior, sd_avg_speed_prior, sd_best_speed_prior, sd_good_avg_speed_prior,
     -- ③ 展開・ラップ適性（瞬発力＝後傾実績 / 持続力＝前傾実績）
     shun_runs_prior, shun_show_rate_prior, shun_avg_speed_prior,
     mochi_runs_prior, mochi_show_rate_prior, mochi_avg_speed_prior,

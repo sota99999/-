@@ -24,18 +24,24 @@ CATEGORICAL = ["venue_id", "surface", "prev_surface",
 
 # 条件特化モデルの特徴量ホワイトリスト（①同条件 ②似た条件 ③展開・ラップ のみ）
 #   騎手・馬体重・ローテ・クラス・近走・全体Elo などは意図的に含めない。
+#   ※方針: 凡走は無視し「好走（複勝圏）時の最高パフォーマンス」で評価する。
+#     best_speed=最高SP / wins=勝利数 / good_avg_speed=好走時平均SP を主役にし、
+#     凡走を直接含む平均着順(avg_finish)は特徴に入れない。
 CONDITION_FEATURES = [
     # ① 同条件での能力（競馬場×馬場種別×距離帯×道悪が一致する過去走）。wins=同条件勝利数
     "same_runs_prior", "same_wins_prior", "same_show_rate_prior", "same_avg_speed_prior",
-    "same_best_speed_prior", "same_avg_finish_prior", "same_best_last3f_prior",
+    "same_best_speed_prior", "same_best_last3f_prior",
     # ① 同条件（緩め）: 道悪不問の競馬場×馬場種別×距離帯 / 距離不問の競馬場×馬場種別
-    "samed_runs_prior", "samed_wins_prior", "samed_show_rate_prior", "samed_avg_speed_prior", "samed_best_speed_prior",
+    "samed_runs_prior", "samed_wins_prior", "samed_show_rate_prior", "samed_avg_speed_prior",
+    "samed_best_speed_prior", "samed_good_avg_speed_prior",
     "vs_runs_prior", "vs_show_rate_prior", "vs_avg_speed_prior", "vs_best_speed_prior",
     # ① 正確距離スペシャリスト（馬場種別×ちょうど同じ距離。距離帯では薄まる専門性）
-    "xd_runs_prior", "xd_wins_prior", "xd_show_rate_prior", "xd_avg_speed_prior", "xd_best_speed_prior",
+    "xd_runs_prior", "xd_wins_prior", "xd_show_rate_prior", "xd_avg_speed_prior",
+    "xd_best_speed_prior", "xd_good_avg_speed_prior",
     # ② 似た条件での能力（回り×直線長×馬場種別×距離帯 / 馬場種別×距離帯）
     "sim_runs_prior", "sim_show_rate_prior", "sim_avg_speed_prior", "sim_best_speed_prior",
-    "sd_runs_prior", "sd_avg_speed_prior", "sd_best_speed_prior",
+    "sim_good_avg_speed_prior",
+    "sd_runs_prior", "sd_avg_speed_prior", "sd_best_speed_prior", "sd_good_avg_speed_prior",
     # ③ レース展開・ラップ（ペース推定・展開適合・脚質・瞬発力指標）
     "race_pace_estimate", "pace_fit", "run_style_prior", "best_last3f_prior", "field_size",
     # ③ 展開・ラップ適性（瞬発力＝後傾実績 / 持続力＝前傾実績）
