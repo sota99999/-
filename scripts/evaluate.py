@@ -82,7 +82,9 @@ def main(argv=None) -> int:
     p.add_argument("--mark-min-runs", type=int, default=3,
                    help="最終結論で印(妙味馬)を付ける最低出走回数")
     p.add_argument("--mark-max-odds", type=float, default=20.0,
-                   help="最終結論で印(妙味馬)を付ける単勝オッズ上限")
+                   help="◎の単勝オッズ上限（較正重視で堅め）")
+    p.add_argument("--sub-max-odds", type=float, default=None,
+                   help="○▲△の単勝オッズ上限（既定=◎と同じ。広げると穴の妙味を拾う）")
     p.add_argument("--hon-mode", choices=["strong", "value"], default="strong",
                    help="◎の選び方: strong=強い馬(人気すぎ除外/既定), value=妙味(穴)")
     p.add_argument("--hon-min-odds", type=float, default=1.0,
@@ -146,6 +148,7 @@ def main(argv=None) -> int:
         marked.append(card.assign_marks(g, value_mode=vm, strength_col=strength_col,
                                         min_runs=args.mark_min_runs,
                                         max_odds=args.mark_max_odds,
+                                        sub_max_odds=args.sub_max_odds,
                                         hon_mode=args.hon_mode,
                                         hon_min_odds=args.hon_min_odds))
     sub = pd.concat(marked, ignore_index=True)

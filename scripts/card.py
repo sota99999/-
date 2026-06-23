@@ -201,7 +201,8 @@ SUB_MARKS = ["○", "▲", "△", "△", "△"]   # ◎の次以降（△の数�
 
 def assign_marks(g: pd.DataFrame, value_mode: bool, strength_col: str = "show_p",
                  min_runs: int = 3, max_odds: float = 20.0,
-                 hon_mode: str = "strong", hon_min_odds: float = 1.0) -> pd.DataFrame:
+                 hon_mode: str = "strong", hon_min_odds: float = 1.0,
+                 sub_max_odds: float | None = None) -> pd.DataFrame:
     """1レース分の出走馬に印(mark列)を付け、印→強さ順に並べ替えて返す。
 
     value_mode=True（最終結論・オッズあり）:
@@ -219,9 +220,13 @@ def assign_marks(g: pd.DataFrame, value_mode: bool, strength_col: str = "show_p"
         △ = 妙味の3番手以降（高回収の押さえ）。
       該当が無ければ強さ上位で埋める。印の数はレースで変動する。
       ※hon_mode="value" のときは◎も妙味(EV≧1)の中の単勝確率最上位にする。
+      ※オッズ上限は ◎=max_odds（較正重視で堅め）、○▲△=sub_max_odds
+        （既定は max_odds。広げると穴の妙味まで拾える）と分離できる。
     value_mode=False（全頭診断・オッズなし）:
       単純に強さ順（strength_col 降順）で ◎○▲△△× を付ける。
     """
+    if sub_max_odds is None:
+        sub_max_odds = max_odds
     g = g.copy()
     g["mark"] = ""
     if value_mode and "ev" in g.columns:
@@ -229,10 +234,10 @@ def assign_marks(g: pd.DataFrame, value_mode: bool, strength_col: str = "show_p"
         ev = pd.to_numeric(g["ev"], errors="coerce")
         odds = pd.to_numeric(g.get("odds"), errors="coerce")
         runs = pd.to_numeric(g.get("runs_prior"), errors="coerce").fillna(0)
-        # 妙味＝オッズ以上の評価。ただし出走歴と妥当なオッズに限定（大穴の過大評価を除外）
-        overlay = (ev >= 1.0) & (runs >= min_runs) & (odds <= max_odds) & odds.notna()
+        # 妙味＝オッズ以上の評価。○▲△は sub_max_odds まで拾う（穴の裾野を広げる）
+        overlay = (ev >= 1.0) & (runs >= min_runs) & (odds <= sub_max_odds) & odds.notna()
 
-        # ◎ 的中重視: 強い馬（人気すぎ除外）。value時は妙味の中の最強
+        # ◎ 的中重視: 強い馬（人気すぎ除外）。◎だけは max_odds で堅めに限定
         if hon_mode == "value":
             hon = (p[overlay].idxmax() if overlay.any() else p.idxmax())
         else:
@@ -279,7 +284,9 @@ def main(argv=None) -> int:
     p.add_argument("--mark-min-runs", type=int, default=3,
                    help="最終結論で印(妙味馬)を付ける最低出走回数（能力未知馬を除外）")
     p.add_argument("--mark-max-odds", type=float, default=20.0,
-                   help="最終結論で印(妙味馬)を付ける単勝オッズ上限（大穴の過大評価を除外）")
+                   help="◎の単勝オッズ上限（較正重視で堅め。大穴の過大評価を除外）")
+    p.add_argument("--sub-max-odds", type=float, default=None,
+                   help="○▲△の単勝オッズ上限（既定=◎と同じ。広げると穴の妙味を拾う）")
     p.add_argument("--hon-mode", choices=["strong", "value"], default="strong",
                    help="◎の選び方: strong=強い馬(人気すぎ除外/既定), value=妙味(穴)")
     p.add_argument("--hon-min-odds", type=float, default=1.0,
@@ -355,6 +362,7 @@ def main(argv=None) -> int:
         g = assign_marks(g, value_mode=has_odds, strength_col=strength_col,
                          min_runs=args.mark_min_runs,
                          max_odds=args.mark_max_odds,
+                         sub_max_odds=args.sub_max_odds,
                          hon_mode=args.hon_mode,
                          hon_min_odds=args.hon_min_odds).reset_index(drop=True)
         if args.top:
