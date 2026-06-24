@@ -67,6 +67,8 @@ def main(argv=None) -> int:
     p.add_argument("--from", dest="date_from",
                    help="この日以降のレースだけ（例 2026-03-07）")
     p.add_argument("--to", dest="date_to", help="この日までのレースだけ（例 2026-06-21）")
+    p.add_argument("--compact", action="store_true",
+                   help="1レース1行のコンパクト表示（全レースを一覧する用）")
     p.add_argument("--mark-max-odds", type=float, default=20.0)
     p.add_argument("--sub-max-odds", type=float, default=50.0)
     p.add_argument("--mark-min-runs", type=int, default=2)
@@ -107,6 +109,8 @@ def main(argv=None) -> int:
                 for ng, nm in zip(yr["ng"], yr["race_name"])]
     if target == "ALL":     # 全重賞（G1/G2/G3）
         races = yr[yr["g2"].isin(["G1", "G2", "G3"])].sort_values("race_date")
+    elif target == "全":    # グレード問わず全レース
+        races = yr.sort_values("race_date")
     else:
         races = yr[yr["g2"] == target].sort_values("race_date")
     # それでも0件なら、レース名キーワードで救済（G1/G2）
@@ -160,29 +164,42 @@ def main(argv=None) -> int:
         gg = card.assign_marks(gg, value_mode=vm, strength_col="show_p",
                                min_runs=args.mark_min_runs,
                                max_odds=args.mark_max_odds, sub_max_odds=args.sub_max_odds)
-        print(head)
-        # 印（◎○▲△）と着順
+        # 印（◎○▲△）と着順。bets（集計用）は常に作る
         picks = []
         for mk in ["◎", "○", "▲", "△"]:
             for _, r in gg[gg["mark"] == mk].iterrows():
                 picks.append(f"{mk}{_nm(r)}({_fin(r)})")
                 bets.append((mk, r.get("finish"), r.get("odds"), r.get("place_payout")))
+        if gg["finish"].notna().any():
+            n_done += 1
+
+        if args.compact:   # 1レース1行（全レース一覧用）: ◎と勝ち馬・的中
+            hon = gg[gg["mark"] == "◎"]
+            hs = f"◎{_nm(hon.iloc[0])}({_fin(hon.iloc[0])})" if len(hon) else "◎ -"
+            win = gg[gg["finish"] == 1]
+            wt = _nm(win.iloc[0]) if len(win) else "?"
+            hit = ""
+            if len(hon) and pd.notna(hon.iloc[0].get("finish")):
+                f = hon.iloc[0]["finish"]
+                hit = "★◎的中" if f == 1 else ("◎複勝" if f <= 3 else "")
+            rno = int(ra["race_number"]) if pd.notna(ra.get("race_number")) else 0
+            print(f"[{ra['race_date'][5:]}]{VEN.get(ra['venue_id'], ra['venue_id'])}{rno:>2}R "
+                  f"{str(ra['race_name'])[:11]:<11} {hs:<17}勝:{wt:<8}{hit}")
+            continue
+
+        print(head)
         if picks:
             print("  予想: " + " ".join(picks))
-        # 〔穴〕無印・高天井
         ana = [f"{_nm(r)}({_fin(r)})" for _, r in
                gg[(gg["mark"] == "") & (gg["bs_z"] >= 1.0)].iterrows()][:3]
         if ana:
             print("  〔穴〕 " + " ".join(ana))
-        # 〔市場〕オッズ最上位
         favs = gg[gg["odds"].notna()].nsmallest(2, "odds")
-        mk = [f"{_nm(r)}({card._f(r['odds'], '.1f')}倍/{_fin(r)})" for _, r in favs.iterrows()]
-        if mk:
-            print("  〔市場〕 " + " ".join(mk))
-        # 結果 1-3着
+        mkt = [f"{_nm(r)}({card._f(r['odds'], '.1f')}倍/{_fin(r)})" for _, r in favs.iterrows()]
+        if mkt:
+            print("  〔市場〕 " + " ".join(mkt))
         res = gg[gg["finish"].notna()].nsmallest(3, "finish")
         if len(res):
-            n_done += 1
             order = " ".join(f"{int(r['finish'])}.{_nm(r)}" for _, r in res.iterrows())
             print("  結果: " + order)
 
