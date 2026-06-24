@@ -23,6 +23,26 @@ NON_GRADED = re.compile(
     r"新馬|未勝利|メイクデビュー|1勝クラス|2勝クラス|3勝クラス|"
     r"1勝|2勝|3勝|500万|1000万|1600万|オープン\b")
 
+# netkeiba のグレードは画像アイコンで、CSSクラス Icon_GradeType{N} で表される
+#   （1=GⅠ, 2=GⅡ, 3=GⅢ）。結果ページ(race.netkeiba)のHTMLから拾う。
+GRADE_CLASS = re.compile(r'Icon_GradeType(\d+)')
+# 予備: タイトル等に全角(GⅠ/GⅡ/GⅢ)が出る場合
+GRADE_TEXT = re.compile(r'G([ⅠⅡⅢ])')
+ROMAN = {"Ⅰ": "G1", "Ⅱ": "G2", "Ⅲ": "G3"}
+NUM = {"1": "G1", "2": "G2", "3": "G3"}
+
+
+def fetch_grade(race_id: str) -> str | None:
+    """結果ページ(race.netkeiba)からグレード(G1/G2/G3)を取得。重賞でなければ None。"""
+    html = scraper.http_get(scraper.RESULT_URL.format(race_id=race_id), encoding="utf-8")
+    m = GRADE_CLASS.search(html)
+    if m:
+        return NUM.get(m.group(1))   # 4(J/Listed)等は None
+    m = GRADE_TEXT.search(html)
+    if m:
+        return ROMAN.get(m.group(1))
+    return None
+
 
 def main(argv=None) -> int:
     p = argparse.ArgumentParser(description="races.grade を結果ページから取り直して埋める")
@@ -52,9 +72,7 @@ def main(argv=None) -> int:
     found = 0
     for i, (rid, nm) in enumerate(targets, 1):
         try:
-            html = scraper.fetch_html(rid)
-            parsed = scraper.parse_race(html, rid)
-            g = parsed.get("grade")
+            g = fetch_grade(rid)
         except Exception as e:  # noqa: BLE001
             g = None
             if i <= 5:
