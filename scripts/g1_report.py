@@ -64,6 +64,8 @@ def main(argv=None) -> int:
     p.add_argument("--show-model", default="model_show_cond.pkl")
     p.add_argument("--year", default="2026")
     p.add_argument("--grade", default="G1")
+    p.add_argument("--from", dest="date_from",
+                   help="この日以降のレースだけ集計（学習期間を除いてOOS評価する。例 2026-03-07）")
     p.add_argument("--mark-max-odds", type=float, default=20.0)
     p.add_argument("--sub-max-odds", type=float, default=50.0)
     p.add_argument("--mark-min-runs", type=int, default=2)
@@ -108,6 +110,9 @@ def main(argv=None) -> int:
         pat = "|".join(KEYWORDS[target])
         races = yr[yr["race_name"].fillna("").str.contains(pat, regex=True)].sort_values("race_date")
         print(f"（grade情報が無いため、レース名で{target}を判定）")
+    if args.date_from:
+        races = races[races["race_date"] >= args.date_from]
+        print(f"（{args.date_from} 以降のみ＝学習期間を除いたOOS評価）")
     if races.empty:
         ng_n = int(all_races["ng"].notna().sum())
         print(f"{args.year}年の{args.grade}がDBに見つかりません。"
