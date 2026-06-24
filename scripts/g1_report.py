@@ -66,7 +66,12 @@ def main(argv=None) -> int:
     actual = pd.read_sql_query(
         "SELECT race_id, horse_id, finish_position AS finish FROM results "
         "WHERE finish_position IS NOT NULL", conn)
+    place_pay = pd.read_sql_query(
+        "SELECT race_id, combination, payout FROM payouts WHERE bet_type = '複勝'", conn)
     conn.close()
+    place_pay["hn"] = pd.to_numeric(place_pay["combination"], errors="coerce")
+    pmap = {(r, h): p for r, h, p in
+            zip(place_pay["race_id"], place_pay["hn"], place_pay["payout"])}
 
     def _norm(gr):  # GⅠ/GⅡ/GⅢ → G1/G2/G3 に正規化
         if not gr:
@@ -104,6 +109,12 @@ def main(argv=None) -> int:
     sub = card.compute_scores(sub, bundle, show_bundle, {})
     sub = sub.merge(actual, on=["race_id", "horse_id"], how="left")
     sub["odds"] = pd.to_numeric(sub.get("odds"), errors="coerce")
+    # 複勝の確定払戻を (race_id, 馬番) で付与（3着以内のみ値が入る）
+    if "horse_number" in sub.columns:
+        hn = pd.to_numeric(sub["horse_number"], errors="coerce")
+        sub["place_payout"] = [pmap.get((r, h)) for r, h in zip(sub["race_id"], hn)]
+    else:
+        sub["place_payout"] = None
     # 〔穴〕用に最高SPのレース内z
     g = sub.groupby("race_id")["best_speed_prior"]
     sd = g.transform("std").replace(0, np.nan)
@@ -129,7 +140,7 @@ def main(argv=None) -> int:
         for mk in ["◎", "○", "▲", "△"]:
             for _, r in gg[gg["mark"] == mk].iterrows():
                 picks.append(f"{mk}{_nm(r)}({_fin(r)})")
-                bets.append((mk, r.get("finish"), r.get("odds")))
+                bets.append((mk, r.get("finish"), r.get("odds"), r.get("place_payout")))
         if picks:
             print("  予想: " + " ".join(picks))
         # 〔穴〕無印・高天井
@@ -150,11 +161,11 @@ def main(argv=None) -> int:
             print("  結果: " + order)
 
     # 集計
-    bd = pd.DataFrame(bets, columns=["mark", "finish", "odds"])
+    bd = pd.DataFrame(bets, columns=["mark", "finish", "odds", "ppay"])
     bd = bd[bd["finish"].notna()]
     if len(bd):
         print(f"\n---------- 集計（結果確定 {n_done} レース） ----------")
-        print(f"{'印':<3}{'本数':>5}{'単勝的中':>9}{'複勝的中':>9}{'単回収率':>9}")
+        print(f"{'印':<3}{'本数':>5}{'単勝的中':>9}{'複勝的中':>9}{'単回収率':>9}{'複回収率':>9}")
         for mk in ["◎", "○", "▲", "△"]:
             s = bd[bd["mark"] == mk]
             if not len(s):
@@ -162,8 +173,11 @@ def main(argv=None) -> int:
             win = (s["finish"] == 1)
             plc = (s["finish"] <= 3)
             roi = s.loc[win, "odds"].fillna(0).sum() * 100 / (100 * len(s)) * 100
-            print(f"{mk:<3}{len(s):>5}{win.mean()*100:>8.1f}%{plc.mean()*100:>8.1f}%{roi:>8.1f}%")
-    print("\n※印は事前情報のみで採点（リークなし）。秋以降のG1は出馬表公開後に予想可能。")
+            proi = pd.to_numeric(s["ppay"], errors="coerce").fillna(0).sum() / (100 * len(s)) * 100
+            print(f"{mk:<3}{len(s):>5}{win.mean()*100:>8.1f}%{plc.mean()*100:>8.1f}%"
+                  f"{roi:>8.1f}%{proi:>8.1f}%")
+    print("\n※印は事前情報のみで採点（リークなし）。複回収は複勝の確定払戻ベース。"
+          "秋以降のG1は出馬表公開後に予想可能。")
     return 0
 
 
