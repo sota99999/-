@@ -57,6 +57,11 @@ def _fin(r):
     return f"{int(f)}着" if pd.notna(f) else "－"
 
 
+def _od(r):   # 印馬の単勝オッズ
+    o = r.get("odds")
+    return f"{card._f(o, '.1f')}倍" if pd.notna(o) else "?倍"
+
+
 def main(argv=None) -> int:
     p = argparse.ArgumentParser(description="年内G1の一括予想＋結果照合")
     p.add_argument("--db", default="keiba.db")
@@ -168,14 +173,15 @@ def main(argv=None) -> int:
         picks = []
         for mk in ["◎", "○", "▲", "△"]:
             for _, r in gg[gg["mark"] == mk].iterrows():
-                picks.append(f"{mk}{_nm(r)}({_fin(r)})")
+                picks.append(f"{mk}{_nm(r)}({_od(r)}/{_fin(r)})")
                 bets.append((mk, r.get("finish"), r.get("odds"), r.get("place_payout")))
         if gg["finish"].notna().any():
             n_done += 1
 
         if args.compact:   # 1レース1行（全レース一覧用）: ◎と勝ち馬・的中
             hon = gg[gg["mark"] == "◎"]
-            hs = f"◎{_nm(hon.iloc[0])}({_fin(hon.iloc[0])})" if len(hon) else "◎ -"
+            hs = (f"◎{_nm(hon.iloc[0])}({_od(hon.iloc[0])}/{_fin(hon.iloc[0])})"
+                  if len(hon) else "◎ -")
             win = gg[gg["finish"] == 1]
             wt = _nm(win.iloc[0]) if len(win) else "?"
             hit = ""

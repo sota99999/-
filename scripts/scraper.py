@@ -613,6 +613,36 @@ def _result_header_index(header_cells: list[str]):
     }
 
 
+_BET_CLASS = {"Tansho": "単勝", "Fukusho": "複勝", "Wakuren": "枠連", "Umaren": "馬連",
+              "Wide": "ワイド", "Umatan": "馬単", "Fuku3": "三連複", "Tan3": "三連単"}
+
+
+def parse_payouts_live(soup, race_id: str) -> list:
+    """race.netkeiba 結果ページの払戻表(Payout_Detail_Table)から払戻を抽出する。
+
+    各 tr は券種クラス(Tansho/Fukusho/…)を持つ。Result列=組番、Payout列=払戻金。
+    複勝・ワイド等は複数行ぶんが1セルに入るので stripped_strings で対応付ける。
+    """
+    payouts = []
+    for tr in soup.select("table.Payout_Detail_Table tr"):
+        classes = tr.get("class") or []
+        bet_type = next((_BET_CLASS[c] for c in classes if c in _BET_CLASS), None)
+        if not bet_type:
+            continue
+        res_td = tr.select_one("td.Result")
+        pay_td = tr.select_one("td.Payout")
+        if not res_td or not pay_td:
+            continue
+        combos = [s.replace(" ", "") for s in res_td.stripped_strings if re.search(r"\d", s)]
+        pays = [re.sub(r"[^\d]", "", s) for s in pay_td.stripped_strings if re.search(r"\d", s)]
+        for i, combo in enumerate(combos):
+            payouts.append({
+                "race_id": race_id, "bet_type": bet_type, "combination": combo,
+                "payout": _to_int(pays[i]) if i < len(pays) else None, "popularity": None,
+            })
+    return payouts
+
+
 def parse_result_live(html: str, race_id: str) -> dict:
     """race.netkeiba.com の結果ページから race / results を抽出する。
 
@@ -716,7 +746,8 @@ def parse_result_live(html: str, race_id: str) -> dict:
             results.append(row)
 
     race["field_size"] = len(results) or None
-    return {"race": race, "results": results, "payouts": [],
+    return {"race": race, "results": results,
+            "payouts": parse_payouts_live(soup, race_id),
             "laps": parse_laps(html)}
 
 
