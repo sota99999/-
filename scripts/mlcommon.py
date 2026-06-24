@@ -44,8 +44,9 @@ CONDITION_FEATURES = [
     # ② 似た条件での能力（回り×直線長×馬場種別×距離帯 / 馬場種別×距離帯）
     "sim_runs_prior", "sim_show_rate_prior", "sim_best_speed_prior", "sim_good_avg_speed_prior",
     "sd_runs_prior", "sd_best_speed_prior", "sd_good_avg_speed_prior",
-    # 斤量（ハンデ）: 相対斤量=同レース平均との差。絶対斤量も併用
-    "weight_rel", "weight_carried",
+    # ※ 斤量(weight_rel/weight_carried)はビュー・カード表示に在るが、検証で成績を
+    #   悪化させた(◎複勝53→51, ▲137→123)ためモデル入力には含めない。ハンデ戦は
+    #   カードの斤量列を見て人間が上乗せ判断する。
     # ③ レース展開・ラップ（ペース推定・展開適合・脚質・瞬発力指標）
     "race_pace_estimate", "pace_fit", "run_style_prior", "best_last3f_prior", "field_size",
     # ③ 展開・ラップ適性（瞬発力＝後傾実績 / 持続力＝前傾実績）
