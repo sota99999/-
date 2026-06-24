@@ -441,7 +441,9 @@ rot AS (
 withpace AS (
     -- 展開（ペース）推定をレース単位で先に付与（pace_fit 計算のため）
     SELECT rot.*,
-        ROUND(AVG(run_style_prior) OVER (PARTITION BY race_id), 3) AS race_pace_estimate
+        ROUND(AVG(run_style_prior) OVER (PARTITION BY race_id), 3) AS race_pace_estimate,
+        -- ハンデの相対斤量: 同レース平均斤量との差（正=重い負担/好評価, 負=軽ハンデの利）
+        ROUND(weight_carried - AVG(weight_carried) OVER (PARTITION BY race_id), 1) AS weight_rel
     FROM rot
 )
 -- 最終出力: 当該レースの結果列（finish_position/speed_index/last_3f/passing 等）は出さない
@@ -449,7 +451,7 @@ SELECT
     race_id, horse_id, race_date, horse_name,
     venue_id, surface, distance, field_size,
     track_condition, direction, weather,
-    post_position, horse_number, weight_carried, horse_weight, weight_change,
+    post_position, horse_number, weight_carried, weight_rel, horse_weight, weight_change,
     odds, popularity, draw_ratio,
     class_level,                                          -- 当該レースのクラス格（出走前に既知）
     elo_before,                                           -- Eloレーティング（レース直前）

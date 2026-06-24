@@ -97,7 +97,7 @@ COL_CATEGORY = {
     "layoff_group": "ローテーション", "surface_change": "ローテーション",
     # 馬体・斤量・条件
     "horse_weight": "馬体重", "weight_change": "馬体重",
-    "weight_carried": "斤量", "field_size": "出走頭数",
+    "weight_carried": "斤量", "weight_rel": "斤量", "field_size": "出走頭数",
     "odds": "オッズ/人気", "popularity": "オッズ/人気",
 }
 

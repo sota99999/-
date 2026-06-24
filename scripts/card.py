@@ -401,17 +401,17 @@ def main(argv=None) -> int:
             g = g.head(args.top)
         print(f"\n=== {rid}  {names.get(rid, '')} ===")
         print(f"{'印':<2}{'馬番':>3} {'馬名':<12}{'勝率':>7}{fuku_h} "
-              f"{'Elo':>6} {'最高SP':>7}{odds_h}")
+              f"{'最高SP':>7}{'斤量':>6}{odds_h}")
         for _, r in g.iterrows():
             mark = r["mark"] or "  "
             wr = _f(r['p'] * 100, '5.1f') + "%" + st(r, 'p')
             fuku = (" " + _f(r.get('show_p') * 100, '5.1f') + "%" + st(r, 'show_p')) if show_bundle else ""
-            el = _f(r.get('elo_before'), '5.0f') + st(r, 'elo_before')
             sp = _f(r.get('best_speed_prior'), '5.1f') + st(r, 'best_speed_prior')
+            kg = _f(r.get('weight_carried'), '4.1f')   # 斤量
             odds = (" " + _f(r.get('odds'), '5.1f')
                     + " " + _f(r.get('ev'), '5.2f') + st(r, 'ev')) if has_odds else ""
             print(f"{mark:<2}{int(r['horse_number']):>3} {str(r['horse_name'])[:12]:<12}"
-                  f"{wr:>7}{fuku} {el:>6} {sp:>7}{odds}")
+                  f"{wr:>7}{fuku} {sp:>7}{kg:>6}{odds}")
         # 〔評価〕印を付けた馬の目立つ強み/弱み
         lines = []
         for _, r in g[g["mark"] != ""].head(5).iterrows():
