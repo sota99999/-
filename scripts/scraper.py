@@ -485,6 +485,10 @@ def parse_shutuba(html: str, race_id: str) -> dict:
 
     name_el = soup.select_one(".RaceName, .RaceList_Item02 .RaceName, h1")
     race["race_name"] = name_el.get_text(strip=True) if name_el else None
+    if not race["race_name"]:   # 枠順前等で取れない場合 og:title から（"... 出馬表 | ..."）
+        m = re.search(r'og:title"\s+content="([^"|]+)', html)
+        if m:
+            race["race_name"] = re.sub(r"\s*出馬表\s*$", "", m.group(1)).strip() or None
 
     cond = soup.select_one(".RaceData01")
     cond_text = cond.get_text(" ", strip=True) if cond else ""
@@ -530,18 +534,25 @@ def parse_shutuba(html: str, race_id: str) -> dict:
             i = idx.get(key)
             return cells[i] if i is not None and i < len(cells) else None
 
+        seq = 0
         for tr in rows_tr[1:]:
             cells = tr.find_all("td")
             if not cells:
-                continue
+                continue  # ヘッダー2行目(th のみ)等はスキップ
+            # 馬名セル＝行内の /horse/ リンクを持つ td（枠順前で列がずれても拾える）
+            hc = cell(cells, "馬名")
+            if hc is None or not _id_from_href(hc, "horse"):
+                a = tr.select_one('a[href*="/horse/"]')
+                hc = a.find_parent("td") if a else hc
+            horse_id = _id_from_href(hc, "horse")
+            if not horse_id:
+                continue  # 出走馬でない行（区切り行・除外馬等）はスキップ
+            seq += 1
             row = {"race_id": race_id, "finish_position": None, "finish_status": None}
             row["post_position"] = _to_int((cell(cells, "枠") or _blank()).get_text(strip=True))
-            row["horse_number"] = _to_int((cell(cells, "馬番") or _blank()).get_text(strip=True))
-            if row["horse_number"] is None:
-                continue  # 馬番が取れない行はスキップ
-
-            hc = cell(cells, "馬名")
-            row["horse_id"] = _id_from_href(hc, "horse")
+            # 枠順確定前は馬番が無いので連番を仮置き（確定後の再取得で本来の馬番に更新される）
+            row["horse_number"] = _to_int((cell(cells, "馬番") or _blank()).get_text(strip=True)) or seq
+            row["horse_id"] = horse_id
             row["horse_name"] = hc.get_text(strip=True) if hc else None
             sexage = (cell(cells, "性齢") or _blank()).get_text(strip=True)
             row["sex"] = sexage[0] if sexage else None
@@ -614,6 +625,10 @@ def parse_result_live(html: str, race_id: str) -> dict:
 
     name_el = soup.select_one(".RaceName, .RaceList_Item02 .RaceName, h1")
     race["race_name"] = name_el.get_text(strip=True) if name_el else None
+    if not race["race_name"]:   # 枠順前等で取れない場合 og:title から（"... 出馬表 | ..."）
+        m = re.search(r'og:title"\s+content="([^"|]+)', html)
+        if m:
+            race["race_name"] = re.sub(r"\s*出馬表\s*$", "", m.group(1)).strip() or None
 
     cond = soup.select_one(".RaceData01")
     cond_text = cond.get_text(" ", strip=True) if cond else ""
