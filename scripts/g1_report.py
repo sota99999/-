@@ -65,7 +65,8 @@ def main(argv=None) -> int:
     p.add_argument("--year", default="2026")
     p.add_argument("--grade", default="G1")
     p.add_argument("--from", dest="date_from",
-                   help="この日以降のレースだけ集計（学習期間を除いてOOS評価する。例 2026-03-07）")
+                   help="この日以降のレースだけ（例 2026-03-07）")
+    p.add_argument("--to", dest="date_to", help="この日までのレースだけ（例 2026-06-21）")
     p.add_argument("--mark-max-odds", type=float, default=20.0)
     p.add_argument("--sub-max-odds", type=float, default=50.0)
     p.add_argument("--mark-min-runs", type=int, default=2)
@@ -104,7 +105,10 @@ def main(argv=None) -> int:
     # 当該レース自身のグレード→無ければ過去同名から推定
     yr["g2"] = [ng if ng else name2grade.get(nm)
                 for ng, nm in zip(yr["ng"], yr["race_name"])]
-    races = yr[yr["g2"] == target].sort_values("race_date")
+    if target == "ALL":     # 全重賞（G1/G2/G3）
+        races = yr[yr["g2"].isin(["G1", "G2", "G3"])].sort_values("race_date")
+    else:
+        races = yr[yr["g2"] == target].sort_values("race_date")
     # それでも0件なら、レース名キーワードで救済（G1/G2）
     if races.empty and target in KEYWORDS:
         pat = "|".join(KEYWORDS[target])
@@ -112,7 +116,10 @@ def main(argv=None) -> int:
         print(f"（grade情報が無いため、レース名で{target}を判定）")
     if args.date_from:
         races = races[races["race_date"] >= args.date_from]
-        print(f"（{args.date_from} 以降のみ＝学習期間を除いたOOS評価）")
+    if args.date_to:
+        races = races[races["race_date"] <= args.date_to]
+    if args.date_from or args.date_to:
+        print(f"（期間: {args.date_from or '最初'}〜{args.date_to or '最後'}）")
     if races.empty:
         ng_n = int(all_races["ng"].notna().sum())
         print(f"{args.year}年の{args.grade}がDBに見つかりません。"
