@@ -24,6 +24,15 @@ import card
 VEN = {"01": "札幌", "02": "函館", "03": "福島", "04": "新潟", "05": "東京",
        "06": "中山", "07": "中京", "08": "京都", "09": "阪神", "10": "小倉"}
 
+# JRA平地G1のレース名キーワード（grade列が空でも race_name で判定するため）
+G1_KEYWORDS = [
+    "フェブラリー", "高松宮記念", "大阪杯", "桜花賞", "皐月賞", "天皇賞",
+    "ＮＨＫマイル", "NHKマイル", "ヴィクトリアマイル", "オークス", "優駿牝馬",
+    "ダービー", "東京優駿", "安田記念", "宝塚記念", "スプリンターズ", "秋華賞",
+    "菊花賞", "エリザベス女王杯", "マイルチャンピオンシップ", "ジャパンカップ",
+    "ジャパンＣ", "チャンピオンズ", "阪神ジュベナイル", "朝日杯", "有馬記念", "ホープフル",
+]
+
 
 def _nm(r):
     return str(r.get("horse_name") or "")[:8]
@@ -51,15 +60,21 @@ def main(argv=None) -> int:
     df = mlcommon.load_data(args.db, None)
 
     conn = sqlite3.connect(args.db)
-    races = pd.read_sql_query(
-        "SELECT race_id, race_date, race_name, venue_id, surface, distance "
-        "FROM races WHERE grade = ? AND race_date LIKE ? ORDER BY race_date",
-        conn, params=(args.grade, args.year + "%"))
+    races_all = pd.read_sql_query(
+        "SELECT race_id, race_date, race_name, venue_id, surface, distance, grade "
+        "FROM races WHERE race_date LIKE ? ORDER BY race_date",
+        conn, params=(args.year + "%",))
     actual = pd.read_sql_query(
         "SELECT race_id, horse_id, finish_position AS finish FROM results "
         "WHERE finish_position IS NOT NULL", conn)
     conn.close()
 
+    # grade列で絞れればそれを使い、空ならレース名キーワードでG1を抽出
+    races = races_all[races_all["grade"] == args.grade]
+    if races.empty:
+        pat = "|".join(G1_KEYWORDS)
+        races = races_all[races_all["race_name"].fillna("").str.contains(pat, regex=True)]
+        print(f"（grade列が空のため、レース名で{args.grade}相当を判定）")
     if races.empty:
         print(f"{args.year}年の{args.grade}がDBに見つかりません。")
         return 0
