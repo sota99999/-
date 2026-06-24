@@ -33,6 +33,18 @@ G1_KEYWORDS = [
     "ジャパンＣ", "チャンピオンズ", "阪神ジュベナイル", "朝日杯", "有馬記念", "ホープフル",
 ]
 
+# JRA平地G2のレース名キーワード（grade列が空のときの名前判定用・概ね2026年基準）
+G2_KEYWORDS = [
+    "京都記念", "中山記念", "弥生賞", "チューリップ賞", "フィリーズレビュー", "金鯱賞",
+    "スプリングステークス", "阪神大賞典", "日経賞", "ニュージーランドトロフィー",
+    "マイラーズカップ", "阪神牝馬", "フローラステークス", "青葉賞", "京都新聞杯",
+    "目黒記念", "京王杯スプリングカップ", "鳴尾記念", "エプソムカップ",
+    "札幌記念", "ローズステークス", "セントライト記念", "オールカマー", "神戸新聞杯",
+    "京都大賞典", "毎日王冠", "スワンステークス", "富士ステークス", "アルゼンチン共和国杯",
+    "東京スポーツ杯", "デイリー杯", "ステイヤーズステークス", "阪神カップ", "チャレンジカップ",
+]
+KEYWORDS = {"G1": G1_KEYWORDS, "G2": G2_KEYWORDS}
+
 
 def _nm(r):
     return str(r.get("horse_name") or "")[:8]
@@ -89,11 +101,11 @@ def main(argv=None) -> int:
     yr["g2"] = [ng if ng else name2grade.get(nm)
                 for ng, nm in zip(yr["ng"], yr["race_name"])]
     races = yr[yr["g2"] == target].sort_values("race_date")
-    # それでも0件かつG1なら、レース名キーワードでG1を救済
-    if races.empty and target == "G1":
-        pat = "|".join(G1_KEYWORDS)
+    # それでも0件なら、レース名キーワードで救済（G1/G2）
+    if races.empty and target in KEYWORDS:
+        pat = "|".join(KEYWORDS[target])
         races = yr[yr["race_name"].fillna("").str.contains(pat, regex=True)].sort_values("race_date")
-        print("（grade情報が無いため、レース名でG1を判定）")
+        print(f"（grade情報が無いため、レース名で{target}を判定）")
     if races.empty:
         ng_n = int(all_races["ng"].notna().sum())
         print(f"{args.year}年の{args.grade}がDBに見つかりません。"
