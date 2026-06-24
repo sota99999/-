@@ -60,24 +60,42 @@ def main(argv=None) -> int:
     df = mlcommon.load_data(args.db, None)
 
     conn = sqlite3.connect(args.db)
-    races_all = pd.read_sql_query(
-        "SELECT race_id, race_date, race_name, venue_id, surface, distance, grade "
-        "FROM races WHERE race_date LIKE ? ORDER BY race_date",
-        conn, params=(args.year + "%",))
+    all_races = pd.read_sql_query(
+        "SELECT race_id, race_date, race_name, venue_id, surface, distance, grade FROM races",
+        conn)
     actual = pd.read_sql_query(
         "SELECT race_id, horse_id, finish_position AS finish FROM results "
         "WHERE finish_position IS NOT NULL", conn)
     conn.close()
 
-    # grade列で絞れればそれを使い、空ならレース名キーワードでG1を抽出
-    races = races_all[races_all["grade"] == args.grade]
-    if races.empty:
+    def _norm(gr):  # GⅠ/GⅡ/GⅢ → G1/G2/G3 に正規化
+        if not gr:
+            return None
+        return gr.replace("Ⅰ", "1").replace("Ⅱ", "2").replace("Ⅲ", "3")
+
+    all_races["ng"] = all_races["grade"].map(_norm)
+    target = _norm(args.grade)
+    # レース名→グレード（グレードが入っている全レースから多数決）
+    graded = all_races[all_races["ng"].notna()]
+    name2grade = (graded.groupby("race_name")["ng"].agg(lambda s: s.value_counts().idxmax()).to_dict()
+                  if len(graded) else {})
+    yr = all_races[all_races["race_date"].str.startswith(args.year)].copy()
+    # 当該レース自身のグレード→無ければ過去同名から推定
+    yr["g2"] = [ng if ng else name2grade.get(nm)
+                for ng, nm in zip(yr["ng"], yr["race_name"])]
+    races = yr[yr["g2"] == target].sort_values("race_date")
+    # それでも0件かつG1なら、レース名キーワードでG1を救済
+    if races.empty and target == "G1":
         pat = "|".join(G1_KEYWORDS)
-        races = races_all[races_all["race_name"].fillna("").str.contains(pat, regex=True)]
-        print(f"（grade列が空のため、レース名で{args.grade}相当を判定）")
+        races = yr[yr["race_name"].fillna("").str.contains(pat, regex=True)].sort_values("race_date")
+        print("（grade情報が無いため、レース名でG1を判定）")
     if races.empty:
-        print(f"{args.year}年の{args.grade}がDBに見つかりません。")
+        ng_n = int(all_races["ng"].notna().sum())
+        print(f"{args.year}年の{args.grade}がDBに見つかりません。"
+              f"（グレード入りレース数={ng_n}。0ならグレード未取得で、"
+              f"G2/G3判定にはグレードの再取得が必要です）")
         return 0
+    print(f"（{args.grade}={target} を {len(races)}レース抽出）")
 
     sub = df[df["race_id"].isin(races["race_id"])].copy()
     if sub.empty:
