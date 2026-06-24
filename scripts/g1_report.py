@@ -178,19 +178,25 @@ def main(argv=None) -> int:
         if gg["finish"].notna().any():
             n_done += 1
 
-        if args.compact:   # 1レース1行（全レース一覧用）: ◎と勝ち馬・的中
-            hon = gg[gg["mark"] == "◎"]
-            hs = (f"◎{_nm(hon.iloc[0])}({_od(hon.iloc[0])}/{_fin(hon.iloc[0])})"
-                  if len(hon) else "◎ -")
+        if args.compact:   # 1レース1行（全レース一覧用）: ◎・▲と勝ち馬・的中
+            def _mk(mark):
+                m = gg[gg["mark"] == mark]
+                return (f"{mark}{_nm(m.iloc[0])}({_od(m.iloc[0])}/{_fin(m.iloc[0])})"
+                        if len(m) else f"{mark} -")
+
+            def _hit(mark, lab):
+                m = gg[gg["mark"] == mark]
+                if len(m) and pd.notna(m.iloc[0].get("finish")):
+                    f = m.iloc[0]["finish"]
+                    return f"★{lab}的中" if f == 1 else (f"{lab}複勝" if f <= 3 else "")
+                return ""
+
             win = gg[gg["finish"] == 1]
             wt = _nm(win.iloc[0]) if len(win) else "?"
-            hit = ""
-            if len(hon) and pd.notna(hon.iloc[0].get("finish")):
-                f = hon.iloc[0]["finish"]
-                hit = "★◎的中" if f == 1 else ("◎複勝" if f <= 3 else "")
+            hit = " ".join(x for x in [_hit("◎", "◎"), _hit("▲", "▲")] if x)
             rno = int(ra["race_number"]) if pd.notna(ra.get("race_number")) else 0
             print(f"[{ra['race_date'][5:]}]{VEN.get(ra['venue_id'], ra['venue_id'])}{rno:>2}R "
-                  f"{str(ra['race_name'])[:11]:<11} {hs:<17}勝:{wt:<8}{hit}")
+                  f"{str(ra['race_name'])[:10]:<10} {_mk('◎'):<19}{_mk('▲'):<19}勝:{wt:<8}{hit}")
             continue
 
         print(head)
