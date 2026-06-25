@@ -24,8 +24,10 @@ def race_class(name, grade) -> str:
     if g in ("G1", "G2", "G3"):
         return "重賞"
     n = name or ""
-    if "新馬" in n or "未勝利" in n:
-        return "未勝利・新馬"
+    if "新馬" in n:
+        return "新馬"
+    if "未勝利" in n:
+        return "未勝利"
     if any(k in n for k in ["3勝", "1600万"]):
         return "3勝クラス"
     if any(k in n for k in ["2勝", "1000万"]):
@@ -106,7 +108,7 @@ def main(argv=None) -> int:
         tc = base.get("track_condition")
         return [
             ("クラス", [(c, base["cls"] == c) for c in
-                      ["未勝利・新馬", "1勝クラス", "2勝クラス", "3勝クラス", "OP・特別", "重賞"]]),
+                      ["新馬", "未勝利", "1勝クラス", "2勝クラス", "3勝クラス", "OP・特別", "重賞"]]),
             ("馬場種別", [(s, base.get("surface") == s) for s in ["芝", "ダート"]]),
             ("距離帯", [("短 ~1300", dist < 1400), ("マイル 14-17", (dist >= 1400) & (dist < 1800)),
                      ("中 18-21", (dist >= 1800) & (dist < 2200)), ("長 2200~", dist >= 2200)]),
@@ -172,7 +174,7 @@ def main(argv=None) -> int:
         tc = base.get("track_condition")
         dims = [
             ("クラス", [(c, base["cls"] == c) for c in
-                      ["未勝利・新馬", "1勝クラス", "2勝クラス", "3勝クラス", "OP・特別", "重賞"]]),
+                      ["新馬", "未勝利", "1勝クラス", "2勝クラス", "3勝クラス", "OP・特別", "重賞"]]),
             ("馬場種別", [(s, base.get("surface") == s) for s in ["芝", "ダート"]]),
             ("距離帯", [("短 ~1300", dist < 1400), ("マイル 14-17", (dist >= 1400) & (dist < 1800)),
                      ("中 18-21", (dist >= 1800) & (dist < 2200)), ("長 2200~", dist >= 2200)]),
@@ -230,7 +232,7 @@ def main(argv=None) -> int:
             print(f"{label:<14}{r[0]:>5}{r[1]:>6.1f}%{r[2]:>6.1f}%{r[3]:>7.1f}%{r[4]:>7.1f}%")
 
     print("\n[クラス別]"); print(hdr)
-    for cls in ["未勝利・新馬", "1勝クラス", "2勝クラス", "3勝クラス", "OP・特別", "重賞"]:
+    for cls in ["新馬", "未勝利", "1勝クラス", "2勝クラス", "3勝クラス", "OP・特別", "重賞"]:
         row(cls, m[m["cls"] == cls])
 
     print("\n[馬場種別]"); print(hdr)
