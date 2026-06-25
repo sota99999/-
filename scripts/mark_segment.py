@@ -122,6 +122,30 @@ def main(argv=None) -> int:
     print("\n[クラス別]"); print(hdr)
     for cls in ["未勝利・新馬", "1勝クラス", "2勝クラス", "3勝クラス", "OP・特別", "重賞"]:
         row(cls, m[m["cls"] == cls])
+
+    print("\n[馬場種別]"); print(hdr)
+    for sf in ["芝", "ダート", "障害"]:
+        row(sf, m[m.get("surface") == sf])
+
+    print("\n[距離帯]"); print(hdr)
+    dist = pd.to_numeric(m.get("distance"), errors="coerce")
+    row("短距離 ~1300", m[dist < 1400])
+    row("マイル 1400-1700", m[(dist >= 1400) & (dist < 1800)])
+    row("中距離 1800-2100", m[(dist >= 1800) & (dist < 2200)])
+    row("長距離 2200~", m[dist >= 2200])
+
+    print("\n[馬場状態]"); print(hdr)
+    tc = m.get("track_condition")
+    row("良", m[tc == "良"])
+    row("道悪(稍重/重/不良)", m[tc.isin(["稍重", "重", "不良"])])
+
+    print("\n[競馬場]"); print(hdr)
+    VEN = {"01": "札幌", "02": "函館", "03": "福島", "04": "新潟", "05": "東京",
+           "06": "中山", "07": "中京", "08": "京都", "09": "阪神", "10": "小倉"}
+    vc = m.get("venue_id")
+    for vid, vn in VEN.items():
+        row(vn, m[vc == vid])
+
     print("\n[出走頭数別]"); print(hdr)
     row("少頭数 ≤12", m[m["fs"] <= 12])
     row("中 13-15", m[(m["fs"] >= 13) & (m["fs"] <= 15)])
