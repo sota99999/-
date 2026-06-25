@@ -87,6 +87,8 @@ def main(argv=None) -> int:
                    help="○▲△の単勝オッズ上限（既定=◎と同じ。広げると穴の妙味を拾う）")
     p.add_argument("--hon-mode", choices=["strong", "value"], default="strong",
                    help="◎の選び方: strong=強い馬(人気すぎ除外/既定), value=妙味(穴)")
+    p.add_argument("--hon-by", choices=["win", "show"], default="win",
+                   help="◎の選定指標: win=単勝確率(既定), show=複勝確率(的中重視)")
     p.add_argument("--hon-min-odds", type=float, default=1.0,
                    help="◎(strong時)の単勝オッズ下限。人気を背負いすぎた本命を除外")
     p.add_argument("--weights", help="能力重視リウェイトの比率（card と同じ書式）")
@@ -150,7 +152,8 @@ def main(argv=None) -> int:
                                         max_odds=args.mark_max_odds,
                                         sub_max_odds=args.sub_max_odds,
                                         hon_mode=args.hon_mode,
-                                        hon_min_odds=args.hon_min_odds))
+                                        hon_min_odds=args.hon_min_odds,
+                                        hon_by=args.hon_by))
     sub = pd.concat(marked, ignore_index=True)
 
     n_races = sub["race_id"].nunique()

@@ -202,7 +202,7 @@ SUB_MARKS = ["○", "▲", "△", "△", "△"]   # ◎の次以降（△の数�
 def assign_marks(g: pd.DataFrame, value_mode: bool, strength_col: str = "show_p",
                  min_runs: int = 3, max_odds: float = 20.0,
                  hon_mode: str = "strong", hon_min_odds: float = 1.0,
-                 sub_max_odds: float | None = None) -> pd.DataFrame:
+                 sub_max_odds: float | None = None, hon_by: str = "win") -> pd.DataFrame:
     """1レース分の出走馬に印(mark列)を付け、印→強さ順に並べ替えて返す。
 
     value_mode=True（最終結論・オッズあり）:
@@ -237,13 +237,17 @@ def assign_marks(g: pd.DataFrame, value_mode: bool, strength_col: str = "show_p"
         # 妙味＝オッズ以上の評価。○▲△は sub_max_odds まで拾う（穴の裾野を広げる）
         overlay = (ev >= 1.0) & (runs >= min_runs) & (odds <= sub_max_odds) & odds.notna()
 
-        # ◎ 的中重視: 強い馬（人気すぎ除外）。◎だけは max_odds で堅めに限定
+        # ◎の選定指標: hon_by="show"なら複勝確率(=馬券圏に来やすさ)で、"win"なら単勝確率で
+        hp = pd.to_numeric(g.get("show_p"), errors="coerce") if hon_by == "show" else p
+        if hp.isna().all():
+            hp = p
+        # ◎ 的中重視: 強い馬。◎だけは max_odds で堅めに限定（hon_min_odsで人気すぎ除外も可）
         if hon_mode == "value":
-            hon = (p[overlay].idxmax() if overlay.any() else p.idxmax())
+            hon = (hp[overlay].idxmax() if overlay.any() else hp.idxmax())
         else:
             elig = (runs >= min_runs) & (odds >= hon_min_odds) \
                 & (odds <= max_odds) & odds.notna()
-            hon = (p[elig].idxmax() if elig.any() else p.idxmax())
+            hon = (hp[elig].idxmax() if elig.any() else hp.idxmax())
         g.loc[hon, "mark"] = "◎"
 
         # ○▲△: ◎を除く妙味馬を強さ順に。○=本線 ▲=2番手(回収のヤマ) △=3番手以降
@@ -289,6 +293,8 @@ def main(argv=None) -> int:
                    help="○▲△の単勝オッズ上限（既定=◎と同じ。広げると穴の妙味を拾う）")
     p.add_argument("--hon-mode", choices=["strong", "value"], default="strong",
                    help="◎の選び方: strong=強い馬(人気すぎ除外/既定), value=妙味(穴)")
+    p.add_argument("--hon-by", choices=["win", "show"], default="win",
+                   help="◎の選定指標: win=単勝確率(既定), show=複勝確率(=馬券圏に来やすさで的中重視)")
     p.add_argument("--hon-min-odds", type=float, default=1.0,
                    help="◎(strong時)の単勝オッズ下限。人気を背負いすぎた本命を除外")
     p.add_argument("--weights", help='能力重視リウェイトの比率。例 '
@@ -396,7 +402,8 @@ def main(argv=None) -> int:
                          max_odds=args.mark_max_odds,
                          sub_max_odds=args.sub_max_odds,
                          hon_mode=args.hon_mode,
-                         hon_min_odds=args.hon_min_odds).reset_index(drop=True)
+                         hon_min_odds=args.hon_min_odds,
+                         hon_by=args.hon_by).reset_index(drop=True)
         if args.top:
             g = g.head(args.top)
         print(f"\n=== {rid}  {names.get(rid, '')} ===")
