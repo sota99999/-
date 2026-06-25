@@ -98,6 +98,52 @@ def main(argv=None) -> int:
     sub["cls"] = sub["race_id"].map(cmap)
     sub["fs"] = pd.to_numeric(sub["race_id"].map(fmap), errors="coerce")
 
+    VEN = {"01": "札幌", "02": "函館", "03": "福島", "04": "新潟", "05": "東京",
+           "06": "中山", "07": "中京", "08": "京都", "09": "阪神", "10": "小倉"}
+
+    # --mark ALL: ◎○▲△を横並び（各セル=単回収/複回収%）で1表にまとめる
+    if args.mark == "ALL":
+        base = sub[sub["finish"].notna()].copy()
+        dist = pd.to_numeric(base.get("distance"), errors="coerce")
+        tc = base.get("track_condition")
+        dims = [
+            ("クラス", [(c, base["cls"] == c) for c in
+                      ["未勝利・新馬", "1勝クラス", "2勝クラス", "3勝クラス", "OP・特別", "重賞"]]),
+            ("馬場種別", [(s, base.get("surface") == s) for s in ["芝", "ダート"]]),
+            ("距離帯", [("短 ~1300", dist < 1400), ("マイル 14-17", (dist >= 1400) & (dist < 1800)),
+                     ("中 18-21", (dist >= 1800) & (dist < 2200)), ("長 2200~", dist >= 2200)]),
+            ("馬場状態", [("良", tc == "良"), ("道悪", tc.isin(["稍重", "重", "不良"]))]),
+            ("競馬場", [(vn, base.get("venue_id") == vid) for vid, vn in VEN.items()]),
+            ("頭数", [("≤12", base["fs"] <= 12), ("13-15", (base["fs"] >= 13) & (base["fs"] <= 15)),
+                    ("≥16", base["fs"] >= 16)]),
+        ]
+
+        def cell(seg, mk):
+            s = seg[seg["mark"] == mk]
+            n = len(s)
+            if not n:
+                return "    -    "
+            roi = s.loc[s["finish"] == 1, "odds"].fillna(0).sum() / n * 100
+            proi = pd.to_numeric(s["ppay"], errors="coerce").fillna(0).sum() / (100 * n) * 100
+            return f"{roi:>3.0f}/{proi:<3.0f}({n})"
+
+        def line(label, seg):
+            return (f"{label:<13}{cell(seg, '◎'):>13}{cell(seg, '○'):>13}"
+                    f"{cell(seg, '▲'):>13}{cell(seg, '△'):>13}")
+
+        print(f"\n=== 全印 条件別マップ（{args.date_from}〜・各セル=単回収/複回収%(本数)）===")
+        head = f"{'区分':<13}{'◎':>13}{'○':>13}{'▲':>13}{'△':>13}"
+        for title, segs in dims:
+            print(f"\n[{title}]"); print(head)
+            for label, mask in segs:
+                seg = base[mask]
+                if len(seg):
+                    print(line(label, seg))
+        print("\n[全体]"); print(head); print(line("全レース", base))
+        print("\n※各セル=単勝回収率/複勝回収率%(本数)。◎は複勝、▲は単勝で見るのが基本。"
+              "100超で利益。OOS（学習外）評価。")
+        return 0
+
     m = sub[(sub["mark"] == args.mark) & sub["finish"].notna()].copy()
 
     def summ(s):
