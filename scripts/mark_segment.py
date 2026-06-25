@@ -101,6 +101,70 @@ def main(argv=None) -> int:
     VEN = {"01": "札幌", "02": "函館", "03": "福島", "04": "新潟", "05": "東京",
            "06": "中山", "07": "中京", "08": "京都", "09": "阪神", "10": "小倉"}
 
+    def _dims(base):
+        dist = pd.to_numeric(base.get("distance"), errors="coerce")
+        tc = base.get("track_condition")
+        return [
+            ("クラス", [(c, base["cls"] == c) for c in
+                      ["未勝利・新馬", "1勝クラス", "2勝クラス", "3勝クラス", "OP・特別", "重賞"]]),
+            ("馬場種別", [(s, base.get("surface") == s) for s in ["芝", "ダート"]]),
+            ("距離帯", [("短 ~1300", dist < 1400), ("マイル 14-17", (dist >= 1400) & (dist < 1800)),
+                     ("中 18-21", (dist >= 1800) & (dist < 2200)), ("長 2200~", dist >= 2200)]),
+            ("馬場状態", [("良", tc == "良"), ("道悪", tc.isin(["稍重", "重", "不良"]))]),
+            ("競馬場", [(vn, base.get("venue_id") == vid) for vid, vn in VEN.items()]),
+            ("頭数", [("≤12", base["fs"] <= 12), ("13-15", (base["fs"] >= 13) & (base["fs"] <= 15)),
+                    ("≥16", base["fs"] >= 16)]),
+        ]
+
+    # --mark モデル: 印で分けず「モデル本命(複勝率1位)の的中」と予測精度を条件別に
+    if args.mark in ("モデル", "MODEL", "model"):
+        try:
+            from sklearn.metrics import roc_auc_score
+        except Exception:  # noqa: BLE001
+            roc_auc_score = None
+        base = sub[sub["finish"].notna()].copy()
+        base["rank_sp"] = base.groupby("race_id")["show_p"].rank(ascending=False, method="first")
+
+        def auc_of(seg):
+            if roc_auc_score is None:
+                return None
+            y = (seg["finish"] == 1).astype(int)
+            if y.nunique() < 2:
+                return None
+            return roc_auc_score(y, pd.to_numeric(seg["p"], errors="coerce").fillna(0))
+
+        def acc_line(label, seg):
+            tp = seg[seg["rank_sp"] == 1]
+            n = len(tp)
+            if not n:
+                return None
+            win = (tp["finish"] == 1).mean() * 100
+            plc = (tp["finish"] <= 3).mean() * 100
+            pred = tp["show_p"].mean() * 100
+            a = auc_of(seg)
+            astr = f"{a:.3f}" if a is not None else "  -"
+            return (f"{label:<14}{n:>5}{win:>8.1f}%{plc:>8.1f}%"
+                    f"{pred:>6.0f}%→{plc:>4.0f}%{astr:>8}")
+
+        print(f"\n=== モデルの条件別 精度（{args.date_from}〜）===")
+        print("  本命=複勝率1位の馬。本命複的中とAUCが高い条件＝モデルが信頼できる。"
+              "AUC=勝ち馬を上位に見抜く力(0.5=でたらめ/1=完璧)。")
+        head = (f"{'区分':<14}{'R数':>5}{'本命単的中':>9}{'本命複的中':>9}"
+                f"{'較正(予→実)':>13}{'AUC':>8}")
+        for title, segs in _dims(base):
+            print(f"\n[{title}]"); print(head)
+            for label, mask in segs:
+                s = base[mask]
+                if len(s):
+                    ln = acc_line(label, s)
+                    if ln:
+                        print(ln)
+        print("\n[全体]"); print(head)
+        print(acc_line("全レース", base))
+        print("\n※印・回収率は使わず、モデル予測そのものの精度。複勝的中とAUCが高い条件が"
+              "『モデルが得意』。OOS（学習外）評価。")
+        return 0
+
     # --mark ALL: ◎○▲△を横並び（各セル=単回収/複回収%）で1表にまとめる
     if args.mark == "ALL":
         base = sub[sub["finish"].notna()].copy()
