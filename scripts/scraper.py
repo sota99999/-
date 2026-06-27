@@ -549,9 +549,15 @@ def parse_shutuba(html: str, race_id: str) -> dict:
                 continue  # 出走馬でない行（区切り行・除外馬等）はスキップ
             seq += 1
             row = {"race_id": race_id, "finish_position": None, "finish_status": None}
-            row["post_position"] = _to_int((cell(cells, "枠") or _blank()).get_text(strip=True))
+            # 馬番・枠は td class="Umaban*/Waku*" から読む（枠順確定版）。無ければヘッダ→連番
+            uta = tr.select_one('td[class*="Umaban"]')
+            wta = tr.select_one('td[class*="Waku"]')
+            hn = _to_int(uta.get_text(strip=True)) if uta else None
+            row["post_position"] = (_to_int(wta.get_text(strip=True)) if wta else None) \
+                or _to_int((cell(cells, "枠") or _blank()).get_text(strip=True))
             # 枠順確定前は馬番が無いので連番を仮置き（確定後の再取得で本来の馬番に更新される）
-            row["horse_number"] = _to_int((cell(cells, "馬番") or _blank()).get_text(strip=True)) or seq
+            row["horse_number"] = hn \
+                or _to_int((cell(cells, "馬番") or _blank()).get_text(strip=True)) or seq
             row["horse_id"] = horse_id
             row["horse_name"] = hc.get_text(strip=True) if hc else None
             sexage = (cell(cells, "性齢") or _blank()).get_text(strip=True)
