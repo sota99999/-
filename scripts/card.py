@@ -288,6 +288,10 @@ def _ability_table(sub: pd.DataFrame, names: dict, top: int = 0) -> int:
     ABIL = [("best_speed_prior", "最高SP", "5.1f"),
             ("good_avg_speed_prior", "好走平均", "6.1f"),
             ("elo_before", "Elo", "6.0f")]
+    # 回顧（結果確定後）なら着順列を出す。1頭でも着順が入っていれば表示する。
+    has_fin = "finish" in sub.columns and pd.to_numeric(
+        sub["finish"], errors="coerce").notna().any()
+    fin_h = f"{'着順':>5}" if has_fin else ""
     for rid, g in sub.groupby("race_id"):
         g = g.copy()
         # 指標ごとに「レース内の最大値」と「平均・標準偏差(z用)」を出す
@@ -299,7 +303,7 @@ def _ability_table(sub: pd.DataFrame, names: dict, top: int = 0) -> int:
         if top:
             g = g.head(top)
         print(f"\n=== {rid}  {names.get(rid, '')} ===")
-        print(f"{'馬番':>3} {'馬名':<12}{'最高SP':>7}{'好走平均':>8}{'Elo':>8}{'オッズ':>8}")
+        print(f"{'馬番':>3} {'馬名':<12}{'最高SP':>7}{'好走平均':>8}{'Elo':>8}{'オッズ':>8}{fin_h}")
         for _, r in g.iterrows():
             cells = []
             for col, _, fmt in ABIL:
@@ -313,8 +317,12 @@ def _ability_table(sub: pd.DataFrame, names: dict, top: int = 0) -> int:
                         chk = "＋"
                 cells.append(_f(r.get(col), fmt) + chk)
             odds = _f(r.get("odds"), "6.1f")
+            fin = ""
+            if has_fin:
+                fv = pd.to_numeric(pd.Series([r.get("finish")]), errors="coerce").iloc[0]
+                fin = f"{int(fv):>5}" if pd.notna(fv) else f"{'-':>5}"
             print(f"{int(r['horse_number']):>3} {str(r['horse_name'])[:12]:<12}"
-                  f"{cells[0]:>7}{cells[1]:>8}{cells[2]:>8}{odds:>8}")
+                  f"{cells[0]:>7}{cells[1]:>8}{cells[2]:>8}{odds:>8}{fin}")
     print("\n※能力指標のみ表示（印・モデル確率なし）。"
           "最高SP=スピード指数の自己最高(天井)、好走平均=好走時(3着内)だけの平均SP、"
           "Elo=相手込みの総合実力(初期1500)。すべて当該レース前の値。")
@@ -384,7 +392,14 @@ def main(argv=None) -> int:
 
     # --- 能力指標のみの一覧表示（印・モデル確率なし） -----------------------
     #   3指標それぞれ、出走馬中で最高=★ / 平均より明確に上(z≧1)=＋ をチェック。
+    #   回顧用に、結果が確定していれば着順も結合して表示する（未確定は空欄）。
     if args.ability_only:
+        conn = sqlite3.connect(args.db)
+        fin = pd.read_sql_query(
+            "SELECT race_id, horse_id, finish_position AS finish FROM results "
+            "WHERE finish_position IS NOT NULL", conn)
+        conn.close()
+        sub = sub.merge(fin, on=["race_id", "horse_id"], how="left")
         return _ability_table(sub, names, args.top)
 
     # モデル予測（card と evaluate で共通の採点）
