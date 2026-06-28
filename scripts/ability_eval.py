@@ -86,8 +86,14 @@ def main(argv=None) -> int:
     ran = sub[sub["finish"].notna()].copy()
 
     n_races = sub["race_id"].nunique()
+    # 複勝回収の信頼度: 3着内の馬のうち複勝払戻が取れている割合（低いと複回収は過小評価）
+    placed = ran[ran["finish"] <= 3]
+    cov = (pd.to_numeric(placed.get("place_payout"), errors="coerce").notna().mean()
+           if len(placed) else 0.0)
+    dmin = sub["race_date"].min(); dmax = sub["race_date"].max()
     print(f"\n=== 能力2指標の印別 回顧（{args.date_from or '最初'}〜{args.date_to or '最後'}） ===")
-    print(f"対象レース数: {n_races}（結果確定）")
+    print(f"対象レース数: {n_races}（結果確定 / 実日付 {dmin}〜{dmax}）")
+    print(f"複勝払戻カバー率: {cov*100:.0f}%（低いと『複回収』は過小評価。単回収・的中率は影響なし）")
     head = f"{'印':<10}{'本数':>5}{'単的中':>9}{'複的中':>9}{'単回収':>9}{'複回収':>9}"
 
     for col, label, _ in card.ABILITY_COLS:
