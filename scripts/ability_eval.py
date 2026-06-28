@@ -96,16 +96,25 @@ def main(argv=None) -> int:
         for mk in ["⭐", "◎", "○", "▲", "△"]:
             print(_row(mk, _summ(ran[ran[col + "_mark"] == mk])))
 
-    # 二冠軸: 両指標とも ◎ または ⭐（天井もEloも場内トップ級）
-    sp = ran["best_speed_prior_mark"]; el = ran["elo_before_mark"]
-    both = ran[sp.isin(["◎", "⭐"]) & el.isin(["◎", "⭐"])]
-    print("\n― 特別集計 ―")
+    # 2指標の印の組み合わせ（指定の7パターン）
+    sp_m = ran["best_speed_prior_mark"]; el_m = ran["elo_before_mark"]
+    sp_v = ran["best_speed_prior_val"]; el_v = ran["elo_before_val"]
+    combos = [
+        ("Elo⭐ & SP⭐", (el_m == "⭐") & (sp_m == "⭐")),
+        ("Elo⭐ & SP◎", (el_m == "⭐") & (sp_m == "◎")),
+        ("Elo◎ & SP⭐", (el_m == "◎") & (sp_m == "⭐")),
+        ("両方◎(SP◎&Elo◎)", (sp_m == "◎") & (el_m == "◎")),
+        ("両方✅(SP✅&Elo✅)", (sp_v == "✅") & (el_v == "✅")),
+        ("片方⭐&片方✅", ((sp_m == "⭐") & (el_v == "✅")) | ((el_m == "⭐") & (sp_v == "✅"))),
+        ("片方◎&片方✅", ((sp_m == "◎") & (el_v == "✅")) | ((el_m == "◎") & (sp_v == "✅"))),
+    ]
+    print("\n― 2指標の組み合わせ ―")
     print(head)
-    print(_row("二冠軸◎⭐", _summ(both)))
-    print(_row("✅妙味", _summ(ran[ran["val_flag"] == "✅"])))
+    for label, mask in combos:
+        print(_row(label, _summ(ran[mask])))
 
     print("\n※単回収=最終単勝オッズ、複回収=複勝確定払戻。各印を100円ずつ買った前提。"
-          "払戻未取得レースは0円扱い。100%超で利益。")
+          "払戻未取得レースは0円扱い。100%超で利益。✅は指標ごと。")
     return 0
 
 
