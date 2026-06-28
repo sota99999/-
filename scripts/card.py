@@ -275,58 +275,110 @@ def _f(v, fmt, default="  -"):
         return default
 
 
-def _ability_table(sub: pd.DataFrame, names: dict, top: int = 0) -> int:
-    """能力3指標(最高SP・好走時平均SP・Elo)とオッズだけを全頭表示する。
+# 能力指標（最高SP・Elo の2本立て）。(列, 見出し, 数値書式)
+ABILITY_COLS = [("best_speed_prior", "最高SP", "5.1f"),
+                ("elo_before", "Elo", "6.0f")]
+RANK_MARKS = ["◎", "○", "▲", "△"]   # 非特出の1〜4番手
+STANDOUT_Z = 1.5      # これ以上で「特出」⭐
+NEARTIE_Z = 0.25      # 5番手以降が4番手とこの差以内なら△（上位と近い値）
+VALUE_EV = 1.5        # 指標ベース期待値がこの倍率以上で「妙味」✅
+VALUE_MINZ = 0.5      # かつ指標で平均より明確に上（過剰な大穴は弾く）
 
-    印もモデル確率も出さない。各指標について出走馬中で
-      ★ = 最も高い馬（比較してのトップ）
-      ＋ = 平均より明確に上（レース内 z≧1.0）の馬
-    をチェックして「比較して高い馬」をひと目で分かるようにする。
+
+def _ability_marks(g: pd.DataFrame) -> pd.DataFrame:
+    """最高SP・Elo の2指標で、レース内に印を付けて返す（表示・評価で共通）。
+
+    各指標について:
+      ⭐ = 特出（出走馬中 z≧1.5）。複数可。
+      ◎○▲△ = 特出を除いた上位1〜4番手。
+      △(追加) = 5番手以降でも4番手と僅差（z差≦0.25）なら△。
+    付けた印は列  best_speed_prior_mark / elo_before_mark  に入れる。
+    オッズがあれば、2指標の合成強さに対しオッズが割に合う馬に ✅（val_flag列）。
+    """
+    g = g.copy()
+    for col, _, _ in ABILITY_COLS:
+        mark = pd.Series("", index=g.index)
+        v = pd.to_numeric(g.get(col), errors="coerce")
+        valid = v.notna()
+        sd = v[valid].std(ddof=0) if valid.sum() >= 2 else 0.0
+        if valid.sum() >= 2 and sd and sd > 0:
+            z = (v - v[valid].mean()) / sd
+        else:
+            z = pd.Series(np.nan, index=g.index)   # 差が無い（新馬の全1500等）は印なし
+        g[col + "_z"] = z
+        if z.notna().any():
+            standout = valid & (z >= STANDOUT_Z)
+            mark[standout] = "⭐"
+            rest = [i for i in g.index[valid & ~standout]]
+            rest.sort(key=lambda i: v[i], reverse=True)
+            rank4_z = None
+            for k, idx in enumerate(rest):
+                if k < 4:
+                    mark[idx] = RANK_MARKS[k]
+                    if k == 3:
+                        rank4_z = z[idx]
+                else:                                # 5番手以降は4番手と僅差のみ△
+                    if rank4_z is not None and (rank4_z - z[idx]) <= NEARTIE_Z:
+                        mark[idx] = "△"
+                    else:
+                        break                        # 値は降順なので以降は対象外
+        g[col + "_mark"] = mark
+
+    # ✅ オッズ妙味: 2指標の合成z→疑似確率(softmax)×オッズ が割に合う馬
+    g["val_flag"] = ""
+    g["ev_ind"] = np.nan
+    odds = pd.to_numeric(g.get("odds"), errors="coerce")
+    if odds.notna().any():
+        comb = pd.concat([g.get("best_speed_prior_z"), g.get("elo_before_z")],
+                         axis=1).mean(axis=1, skipna=True)
+        if comb.notna().any():
+            e = np.exp(comb.fillna(comb[comb.notna()].min()).clip(-3, 3))
+            p_ind = e / e.sum() if e.sum() > 0 else e
+            ev = p_ind * odds
+            g["ev_ind"] = ev
+            flag = (ev >= VALUE_EV) & (comb >= VALUE_MINZ) & odds.notna()
+            g.loc[flag, "val_flag"] = "✅"
+    return g
+
+
+def _ability_table(sub: pd.DataFrame, names: dict, top: int = 0) -> int:
+    """最高SP・Elo の2指標＋印＋オッズ（＋着順）を全頭表示する。
+
+    印もモデル確率も使わず、_ability_marks の印（⭐◎○▲△・✅）だけを出す。
     並びは最高SP(天井能力)の高い順。SPが無い新馬等は下に回す。
     """
-    # (列, 見出し, 数値書式)。Eloは整数、SPは小数1桁
-    ABIL = [("best_speed_prior", "最高SP", "5.1f"),
-            ("good_avg_speed_prior", "好走平均", "6.1f"),
-            ("elo_before", "Elo", "6.0f")]
-    # 回顧（結果確定後）なら着順列を出す。1頭でも着順が入っていれば表示する。
     has_fin = "finish" in sub.columns and pd.to_numeric(
         sub["finish"], errors="coerce").notna().any()
+    has_odds = pd.to_numeric(sub.get("odds"), errors="coerce").notna().any()
     fin_h = f"{'着順':>5}" if has_fin else ""
+    val_h = f"{'妙味':>4}" if has_odds else ""
     for rid, g in sub.groupby("race_id"):
-        g = g.copy()
-        # 指標ごとに「レース内の最大値」と「平均・標準偏差(z用)」を出す
-        stat = {}
-        for col, _, _ in ABIL:
-            v = pd.to_numeric(g.get(col), errors="coerce")
-            stat[col] = (v.max(), v.mean(), v.std(ddof=0))
+        g = _ability_marks(g)
         g = g.sort_values("best_speed_prior", ascending=False, na_position="last")
         if top:
             g = g.head(top)
         print(f"\n=== {rid}  {names.get(rid, '')} ===")
-        print(f"{'馬番':>3} {'馬名':<12}{'最高SP':>7}{'好走平均':>8}{'Elo':>8}{'オッズ':>8}{fin_h}")
+        print(f"{'馬番':>3} {'馬名':<12}{'最高SP':>7}{'印':<2}"
+              f"{'Elo':>6}{'印':<2}{'オッズ':>7}{val_h}{fin_h}")
         for _, r in g.iterrows():
-            cells = []
-            for col, _, fmt in ABIL:
-                val = pd.to_numeric(pd.Series([r.get(col)]), errors="coerce").iloc[0]
-                mx, mu, sd = stat[col]
-                chk = ""
-                if pd.notna(val):
-                    if pd.notna(mx) and val == mx:
-                        chk = "★"
-                    elif sd and sd > 0 and (val - mu) / sd >= 1.0:
-                        chk = "＋"
-                cells.append(_f(r.get(col), fmt) + chk)
+            sp = _f(r.get("best_speed_prior"), "5.1f")
+            spm = r.get("best_speed_prior_mark") or ""
+            elo = _f(r.get("elo_before"), "5.0f")
+            elom = r.get("elo_before_mark") or ""
             odds = _f(r.get("odds"), "6.1f")
+            val = f"{(r.get('val_flag') or ''):<2}" if has_odds else ""
             fin = ""
             if has_fin:
                 fv = pd.to_numeric(pd.Series([r.get("finish")]), errors="coerce").iloc[0]
                 fin = f"{int(fv):>5}" if pd.notna(fv) else f"{'-':>5}"
             print(f"{int(r['horse_number']):>3} {str(r['horse_name'])[:12]:<12}"
-                  f"{cells[0]:>7}{cells[1]:>8}{cells[2]:>8}{odds:>8}{fin}")
-    print("\n※能力指標のみ表示（印・モデル確率なし）。"
-          "最高SP=スピード指数の自己最高(天井)、好走平均=好走時(3着内)だけの平均SP、"
+                  f"{sp:>7}{spm:<2}{elo:>6}{elom:<2}{odds:>7}{val}{fin}")
+    print("\n※2指標のみ。最高SP=スピード指数の自己最高(天井)、"
           "Elo=相手込みの総合実力(初期1500)。すべて当該レース前の値。")
-    print("※★=その指標で出走馬中トップ／＋=平均より明確に上(z≧1.0)。並びは最高SP順。")
+    print("※各指標で ⭐=特出(z≧1.5) / ◎○▲△=非特出の1〜4番手"
+          "(5番手以降も4番手と僅差なら△)。並びは最高SP順。")
+    if has_odds:
+        print("※✅=2指標の強さに対しオッズが割に合う妙味馬（指標ベース期待値≧1.5）。")
     return 0
 
 
