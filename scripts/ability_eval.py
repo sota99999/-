@@ -100,13 +100,15 @@ def main(argv=None) -> int:
     sp_m = ran["best_speed_prior_mark"]; el_m = ran["elo_before_mark"]
     sp_v = ran["best_speed_prior_val"]; el_v = ran["elo_before_val"]
     combos = [
-        ("Elo⭐ & SP⭐", (el_m == "⭐") & (sp_m == "⭐")),
-        ("Elo⭐ & SP◎", (el_m == "⭐") & (sp_m == "◎")),
-        ("Elo◎ & SP⭐", (el_m == "◎") & (sp_m == "⭐")),
-        ("両方◎(SP◎&Elo◎)", (sp_m == "◎") & (el_m == "◎")),
-        ("両方✅(SP✅&Elo✅)", (sp_v == "✅") & (el_v == "✅")),
-        ("片方⭐&片方✅", ((sp_m == "⭐") & (el_v == "✅")) | ((el_m == "⭐") & (sp_v == "✅"))),
-        ("片方◎&片方✅", ((sp_m == "◎") & (el_v == "✅")) | ((el_m == "◎") & (sp_v == "✅"))),
+        ("Elo⭐ SP⭐", (el_m == "⭐") & (sp_m == "⭐")),
+        ("Elo⭐ SP◎", (el_m == "⭐") & (sp_m == "◎")),
+        ("Elo◎ SP⭐", (el_m == "◎") & (sp_m == "⭐")),
+        ("Elo◎ SP◎", (el_m == "◎") & (sp_m == "◎")),
+        ("Elo✅ SP✅", (el_v == "✅") & (sp_v == "✅")),
+        ("Elo⭐ SP✅", (el_m == "⭐") & (sp_v == "✅")),
+        ("Elo✅ SP⭐", (el_v == "✅") & (sp_m == "⭐")),
+        ("Elo◎ SP✅", (el_m == "◎") & (sp_v == "✅")),
+        ("Elo✅ SP◎", (el_v == "✅") & (sp_m == "◎")),
     ]
     print("\n― 2指標の組み合わせ ―")
     print(head)
