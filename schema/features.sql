@@ -266,6 +266,8 @@ base AS (
         -- スピード指数（過去走のみ）
         ROUND(AVG(speed_index) OVER w_hist, 1)            AS avg_speed_prior,
         MAX(speed_index) OVER w_hist                      AS best_speed_prior,
+        -- 好走時平均SP（全走のうち複勝圏=3着以内のときだけの平均SP。凡走を無視した安定実力）
+        ROUND(AVG(CASE WHEN finish_position <= 3 THEN speed_index END) OVER w_hist, 1) AS good_avg_speed_prior,
         LAG(speed_index) OVER w_ord                       AS prev_speed,
         -- 脚質（過去の早い段階の位置取り平均）
         ROUND(AVG(early_pos_ratio) OVER w_hist, 3)        AS run_style_prior,
@@ -456,7 +458,7 @@ SELECT
     class_level,                                          -- 当該レースのクラス格（出走前に既知）
     elo_before,                                           -- Eloレーティング（レース直前）
     runs_prior, wins_prior, win_rate_prior, show_rate_prior, avg_finish_prior, best_last3f_prior,
-    avg_speed_prior, best_speed_prior, prev_speed,
+    avg_speed_prior, best_speed_prior, good_avg_speed_prior, prev_speed,
     run_style_prior, avg_class_level_prior, class_adj_speed_prior,
     jockey_rides_prior, jockey_win_rate_prior, jockey_show_rate_prior,
     course_runs_prior, course_show_rate_prior,

@@ -341,7 +341,8 @@ def main(argv=None) -> int:
     fit_cols = ["hill_show_rate_prior", "io_show_rate_prior", "turn_show_rate_prior",
                 "trans_show_rate_prior", "slowp_show_rate_prior", "highp_show_rate_prior",
                 "shun_show_rate_prior", "mochi_show_rate_prior"]
-    _add_race_z(sub, ["p", "show_p", "ev", "elo_before", "best_speed_prior"]
+    _add_race_z(sub, ["p", "show_p", "ev", "elo_before",
+                      "best_speed_prior", "good_avg_speed_prior"]
                 + [c for c, *_ in STRENGTH] + fit_cols)
 
     def st(r, c):   # 突出値マーク（出走馬中で z>=1.5）
@@ -408,17 +409,19 @@ def main(argv=None) -> int:
             g = g.head(args.top)
         print(f"\n=== {rid}  {names.get(rid, '')} ===")
         print(f"{'印':<2}{'馬番':>3} {'馬名':<12}{'勝率':>7}{fuku_h} "
-              f"{'最高SP':>7}{'斤量':>6}{odds_h}")
+              f"{'最高SP':>7}{'好走平均':>8}{'Elo':>7}{'斤量':>6}{odds_h}")
         for _, r in g.iterrows():
             mark = r["mark"] or "  "
             wr = _f(r['p'] * 100, '5.1f') + "%" + st(r, 'p')
             fuku = (" " + _f(r.get('show_p') * 100, '5.1f') + "%" + st(r, 'show_p')) if show_bundle else ""
             sp = _f(r.get('best_speed_prior'), '5.1f') + st(r, 'best_speed_prior')
+            gsp = _f(r.get('good_avg_speed_prior'), '5.1f') + st(r, 'good_avg_speed_prior')  # 好走時平均SP
+            elo = _f(r.get('elo_before'), '5.0f') + st(r, 'elo_before')                      # Eloレーティング
             kg = _f(r.get('weight_carried'), '4.1f')   # 斤量
             odds = (" " + _f(r.get('odds'), '5.1f')
                     + " " + _f(r.get('ev'), '5.2f') + st(r, 'ev')) if has_odds else ""
             print(f"{mark:<2}{int(r['horse_number']):>3} {str(r['horse_name'])[:12]:<12}"
-                  f"{wr:>7}{fuku} {sp:>7}{kg:>6}{odds}")
+                  f"{wr:>7}{fuku} {sp:>7}{gsp:>8}{elo:>7}{kg:>6}{odds}")
         # 〔評価〕印を付けた馬の目立つ強み/弱み
         lines = []
         for _, r in g[g["mark"] != ""].head(5).iterrows():
@@ -474,6 +477,9 @@ def main(argv=None) -> int:
           else "リウェイトなし＝較正優先（勝率・複勝率はモデル較正値）")
     print(f"\n※{mark_rule}。★=出走馬中で突出して高い値。"
           f"〔評価〕は他馬比較で目立つ強み◎/弱み▼。")
+    print("※能力指標: 最高SP=スピード指数の自己最高(天井)、"
+          "好走平均=好走時(3着内)だけの平均SP(凡走無視の安定実力)、"
+          "Elo=相手関係込みの総合実力(初期1500)。いずれも当該レース前の値。")
     print(f"※{rw}。馬券は自己責任で。")
     return 0
 
