@@ -275,6 +275,53 @@ def _f(v, fmt, default="  -"):
         return default
 
 
+def _ability_table(sub: pd.DataFrame, names: dict, top: int = 0) -> int:
+    """能力3指標(最高SP・好走時平均SP・Elo)とオッズだけを全頭表示する。
+
+    印もモデル確率も出さない。各指標について出走馬中で
+      ★ = 最も高い馬（比較してのトップ）
+      ＋ = 平均より明確に上（レース内 z≧1.0）の馬
+    をチェックして「比較して高い馬」をひと目で分かるようにする。
+    並びは最高SP(天井能力)の高い順。SPが無い新馬等は下に回す。
+    """
+    # (列, 見出し, 数値書式)。Eloは整数、SPは小数1桁
+    ABIL = [("best_speed_prior", "最高SP", "5.1f"),
+            ("good_avg_speed_prior", "好走平均", "6.1f"),
+            ("elo_before", "Elo", "6.0f")]
+    for rid, g in sub.groupby("race_id"):
+        g = g.copy()
+        # 指標ごとに「レース内の最大値」と「平均・標準偏差(z用)」を出す
+        stat = {}
+        for col, _, _ in ABIL:
+            v = pd.to_numeric(g.get(col), errors="coerce")
+            stat[col] = (v.max(), v.mean(), v.std(ddof=0))
+        g = g.sort_values("best_speed_prior", ascending=False, na_position="last")
+        if top:
+            g = g.head(top)
+        print(f"\n=== {rid}  {names.get(rid, '')} ===")
+        print(f"{'馬番':>3} {'馬名':<12}{'最高SP':>7}{'好走平均':>8}{'Elo':>8}{'オッズ':>8}")
+        for _, r in g.iterrows():
+            cells = []
+            for col, _, fmt in ABIL:
+                val = pd.to_numeric(pd.Series([r.get(col)]), errors="coerce").iloc[0]
+                mx, mu, sd = stat[col]
+                chk = ""
+                if pd.notna(val):
+                    if pd.notna(mx) and val == mx:
+                        chk = "★"
+                    elif sd and sd > 0 and (val - mu) / sd >= 1.0:
+                        chk = "＋"
+                cells.append(_f(r.get(col), fmt) + chk)
+            odds = _f(r.get("odds"), "6.1f")
+            print(f"{int(r['horse_number']):>3} {str(r['horse_name'])[:12]:<12}"
+                  f"{cells[0]:>7}{cells[1]:>8}{cells[2]:>8}{odds:>8}")
+    print("\n※能力指標のみ表示（印・モデル確率なし）。"
+          "最高SP=スピード指数の自己最高(天井)、好走平均=好走時(3着内)だけの平均SP、"
+          "Elo=相手込みの総合実力(初期1500)。すべて当該レース前の値。")
+    print("※★=その指標で出走馬中トップ／＋=平均より明確に上(z≧1.0)。並びは最高SP順。")
+    return 0
+
+
 def main(argv=None) -> int:
     p = argparse.ArgumentParser(description="全頭診断")
     p.add_argument("--db", default="keiba.db")
@@ -303,14 +350,19 @@ def main(argv=None) -> int:
                    help="リウェイトの強さ倍率。既定0=較正優先（リウェイトなし）, 1で適用")
     p.add_argument("--same-boost", type=float, default=0.0,
                    help="同条件スペシャリスト・ブーストの強さ（0=無効。0.5〜1.0で①同条件の実績を上乗せ）")
+    p.add_argument("--ability-only", action="store_true",
+                   help="印やモデル確率を出さず、能力3指標(最高SP・好走時平均SP・Elo)と"
+                        "オッズだけを表示。各指標で出走馬中の上位馬に★/＋を付ける")
     args = p.parse_args(argv)
 
     weights = parse_weights(args.weights)
     weights = {k: v * args.lean for k, v in weights.items()}
     use_tilt = any(abs(v) > 1e-9 for v in weights.values())
 
-    bundle = mlcommon.load_model(args.model)
-    show_bundle = mlcommon.load_model(args.show_model) if args.show_model else None
+    # 能力指標だけを見るモードはモデル不要（v_features の素の列だけで表示）
+    bundle = None if args.ability_only else mlcommon.load_model(args.model)
+    show_bundle = mlcommon.load_model(args.show_model) \
+        if (args.show_model and not args.ability_only) else None
     df = mlcommon.load_data(args.db, None)
 
     conn = sqlite3.connect(args.db)
@@ -329,6 +381,11 @@ def main(argv=None) -> int:
     if sub.empty:
         print("対象レースがありません（出馬表を取り込みましたか? 日付指定は合っていますか?）")
         return 0
+
+    # --- 能力指標のみの一覧表示（印・モデル確率なし） -----------------------
+    #   3指標それぞれ、出走馬中で最高=★ / 平均より明確に上(z≧1)=＋ をチェック。
+    if args.ability_only:
+        return _ability_table(sub, names, args.top)
 
     # モデル予測（card と evaluate で共通の採点）
     sub = compute_scores(sub, bundle, show_bundle, weights, same_boost=args.same_boost)
