@@ -45,11 +45,63 @@ def _row(label: str, s: dict) -> str:
             f"{s['roi']:>8.1f}%{s['proi']:>8.1f}%")
 
 
+# 指定の9組み合わせ（Elo側・SP側の印）。df から真偽マスクのリストを作る
+def _combo_masks(df: pd.DataFrame) -> list[tuple[str, pd.Series]]:
+    sp_m = df["best_speed_prior_mark"]; el_m = df["elo_before_mark"]
+    sp_v = df["best_speed_prior_val"]; el_v = df["elo_before_val"]
+    return [
+        ("Elo⭐ SP⭐", (el_m == "⭐") & (sp_m == "⭐")),
+        ("Elo⭐ SP◎", (el_m == "⭐") & (sp_m == "◎")),
+        ("Elo◎ SP⭐", (el_m == "◎") & (sp_m == "⭐")),
+        ("Elo◎ SP◎", (el_m == "◎") & (sp_m == "◎")),
+        ("Elo✅ SP✅", (el_v == "✅") & (sp_v == "✅")),
+        ("Elo⭐ SP✅", (el_m == "⭐") & (sp_v == "✅")),
+        ("Elo✅ SP⭐", (el_v == "✅") & (sp_m == "⭐")),
+        ("Elo◎ SP✅", (el_m == "◎") & (sp_v == "✅")),
+        ("Elo✅ SP◎", (el_v == "✅") & (sp_m == "◎")),
+    ]
+
+
+HEAD = f"{'印':<10}{'本数':>5}{'単的中':>9}{'複的中':>9}{'単回収':>9}{'複回収':>9}"
+
+VENUE = {"01": "札幌", "02": "函館", "03": "福島", "04": "新潟", "05": "東京",
+         "06": "中山", "07": "中京", "08": "京都", "09": "阪神", "10": "小倉"}
+CLASS_ORDER = ["新馬", "未勝利", "1勝", "2勝", "3勝", "OP/L", "重賞", "その他"]
+ODDS_ORDER = ["〜2.0", "2.0〜5.0", "5.0〜10", "10〜20", "20〜50", "50〜"]
+
+
+def _class_bucket(cl) -> str:
+    cl = int(cl) if pd.notna(cl) else 0
+    return {1: "新馬", 2: "未勝利", 3: "1勝", 4: "2勝", 5: "3勝",
+            6: "OP/L"}.get(cl, "重賞" if cl >= 7 else "その他")
+
+
+def _odds_bucket(o) -> str:
+    o = pd.to_numeric(o, errors="coerce")
+    if pd.isna(o):
+        return ""
+    for hi, lab in [(2.0, "〜2.0"), (5.0, "2.0〜5.0"), (10.0, "5.0〜10"),
+                    (20.0, "10〜20"), (50.0, "20〜50")]:
+        if o < hi:
+            return lab
+    return "50〜"
+
+
+def _print_combos(df: pd.DataFrame, title: str) -> None:
+    nr = df["race_id"].nunique()
+    print(f"\n【{title}】 {nr}レース / 印付き{len(df)}頭")
+    print(HEAD)
+    for label, mask in _combo_masks(df):
+        print(_row(label, _summ(df[mask])))
+
+
 def main(argv=None) -> int:
     p = argparse.ArgumentParser(description="能力2指標の印の回顧")
     p.add_argument("--db", default="keiba.db")
     p.add_argument("--from", dest="date_from")
     p.add_argument("--to", dest="date_to")
+    p.add_argument("--by", help="層別バックテスト。class/venue/odds をカンマ区切りで指定"
+                                 "（例 --by class,venue,odds）。指定時は各層で9組み合わせを出す")
     args = p.parse_args(argv)
 
     df = mlcommon.load_data(args.db, None)
@@ -94,31 +146,41 @@ def main(argv=None) -> int:
     print(f"\n=== 能力2指標の印別 回顧（{args.date_from or '最初'}〜{args.date_to or '最後'}） ===")
     print(f"対象レース数: {n_races}（結果確定 / 実日付 {dmin}〜{dmax}）")
     print(f"複勝払戻カバー率: {cov*100:.0f}%（低いと『複回収』は過小評価。単回収・的中率は影響なし）")
-    head = f"{'印':<10}{'本数':>5}{'単的中':>9}{'複的中':>9}{'単回収':>9}{'複回収':>9}"
+
+    if args.by:
+        # 層別バックテスト: 指定の各次元で、バケットごとに9組み合わせを出す
+        ran = ran.copy()
+        ran["_class"] = ran["class_level"].map(_class_bucket)
+        ran["_venue"] = ran["venue_id"].map(lambda v: VENUE.get(str(v).zfill(2), str(v)))
+        ran["_odds"] = ran["odds"].map(_odds_bucket)
+        dims = {"class": ("クラス別", "_class", CLASS_ORDER),
+                "venue": ("競馬場別", "_venue", [VENUE[k] for k in sorted(VENUE)]),
+                "odds": ("オッズ帯別", "_odds", ODDS_ORDER)}
+        for key in [d.strip() for d in args.by.split(",")]:
+            if key not in dims:
+                print(f"\n[skip] 未知の層別キー: {key}（class/venue/odds のみ）"); continue
+            title, colname, order = dims[key]
+            print(f"\n========== {title} ==========")
+            present = [b for b in order if b in set(ran[colname])]
+            present += [b for b in ran[colname].dropna().unique()
+                        if b and b not in present]   # 想定外バケットも拾う
+            for bucket in present:
+                if not bucket:
+                    continue
+                _print_combos(ran[ran[colname] == bucket], f"{title}: {bucket}")
+        print("\n※各層で9組み合わせ。単回収=単勝オッズ、複回収=複勝確定払戻、100%超で利益。"
+              "本数が少ない層は数字が振れるので n を見て判断。")
+        return 0
 
     for col, label, _ in card.ABILITY_COLS:
         print(f"\n― {label} の印 ―")
-        print(head)
+        print(HEAD)
         for mk in ["⭐", "◎", "○", "▲", "△"]:
             print(_row(mk, _summ(ran[ran[col + "_mark"] == mk])))
 
-    # 2指標の印の組み合わせ（指定の7パターン）
-    sp_m = ran["best_speed_prior_mark"]; el_m = ran["elo_before_mark"]
-    sp_v = ran["best_speed_prior_val"]; el_v = ran["elo_before_val"]
-    combos = [
-        ("Elo⭐ SP⭐", (el_m == "⭐") & (sp_m == "⭐")),
-        ("Elo⭐ SP◎", (el_m == "⭐") & (sp_m == "◎")),
-        ("Elo◎ SP⭐", (el_m == "◎") & (sp_m == "⭐")),
-        ("Elo◎ SP◎", (el_m == "◎") & (sp_m == "◎")),
-        ("Elo✅ SP✅", (el_v == "✅") & (sp_v == "✅")),
-        ("Elo⭐ SP✅", (el_m == "⭐") & (sp_v == "✅")),
-        ("Elo✅ SP⭐", (el_v == "✅") & (sp_m == "⭐")),
-        ("Elo◎ SP✅", (el_m == "◎") & (sp_v == "✅")),
-        ("Elo✅ SP◎", (el_v == "✅") & (sp_m == "◎")),
-    ]
     print("\n― 2指標の組み合わせ ―")
-    print(head)
-    for label, mask in combos:
+    print(HEAD)
+    for label, mask in _combo_masks(ran):
         print(_row(label, _summ(ran[mask])))
 
     print("\n※単回収=最終単勝オッズ、複回収=複勝確定払戻。各印を100円ずつ買った前提。"
