@@ -385,6 +385,9 @@ def main(argv=None) -> int:
                    help="全頭診断(オッズ無)の強さ順の基準: show=複勝率(既定), win=勝率")
     p.add_argument("--race-id", help="このレースだけ")
     p.add_argument("--date", help="この開催日の全レース (YYYY-MM-DD)")
+    p.add_argument("--from", dest="date_from", help="開始日 (YYYY-MM-DD)")
+    p.add_argument("--to", dest="date_to", help="終了日 (YYYY-MM-DD)")
+    p.add_argument("--grade", help="グレードで絞る。'重賞'=G1/G2/G3、'G1'等の個別やカンマ区切りも可")
     p.add_argument("--top", type=int, default=0, help="上位何頭まで表示（0=全頭）")
     p.add_argument("--mark-min-runs", type=int, default=2,
                    help="最終結論で印(妙味馬)を付ける最低出走回数（能力未知馬を除外）")
@@ -425,6 +428,26 @@ def main(argv=None) -> int:
     elif args.date:
         ids = [r[0] for r in conn.execute(
             "SELECT race_id FROM races WHERE race_date=? ORDER BY race_id", (args.date,))]
+    elif args.grade or args.date_from or args.date_to:
+        # グレード/期間で絞る（過去レースの印・回顧用）。'重賞'=G1/G2/G3
+        where = []; params = []
+        if args.grade:
+            roman = {"G1": "GⅠ", "G2": "GⅡ", "G3": "GⅢ"}
+            toks = ["G1", "G2", "G3"] if args.grade == "重賞" \
+                else [t.strip().upper() for t in args.grade.split(",") if t.strip()]
+            gset = []
+            for t in toks:
+                gset.append(t)
+                if t in roman:
+                    gset.append(roman[t])
+            where.append("grade IN (%s)" % ",".join("?" * len(gset))); params += gset
+        if args.date_from:
+            where.append("race_date >= ?"); params.append(args.date_from)
+        if args.date_to:
+            where.append("race_date <= ?"); params.append(args.date_to)
+        sql = "SELECT race_id FROM races" + \
+              (" WHERE " + " AND ".join(where) if where else "") + " ORDER BY race_id"
+        ids = [r[0] for r in conn.execute(sql, params)]
     else:
         ids = mlcommon.upcoming_race_ids(args.db)
     names = dict(conn.execute(
