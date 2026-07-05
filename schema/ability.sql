@@ -162,10 +162,7 @@ FROM agg CROSS JOIN mu;
 DROP VIEW IF EXISTS v_predict;
 
 CREATE VIEW v_predict AS
-WITH fw AS (   -- 各レースの平均斤量（今日の斤量補正の基準）
-    SELECT race_id, AVG(weight_carried) AS avg_wt FROM results GROUP BY race_id
-),
-base AS (
+WITH base AS (
     SELECT
         a.race_id, a.horse_id, a.power_top, a.good_avg, a.start,
         a.power, a.n_pw_good, a.toppspeed, a.n_fast_good,
@@ -174,13 +171,10 @@ base AS (
         CASE WHEN ra.distance < 1400 THEN 'sprint'
              WHEN ra.distance < 1800 THEN 'mile'
              WHEN ra.distance < 2200 THEN 'mid' ELSE 'long' END AS today_band,
-        vc.hill_grade, vc.straight_m, vc.turn_size, vc.pace_bias,
-        r.weight_carried, fw.avg_wt
+        vc.hill_grade, vc.straight_m, vc.turn_size, vc.pace_bias
     FROM v_ability a
     JOIN races ra   ON ra.race_id = a.race_id
-    JOIN results r  ON r.race_id = a.race_id AND r.horse_id = a.horse_id
     LEFT JOIN v_course vc ON vc.race_id = a.race_id
-    LEFT JOIN fw    ON fw.race_id = a.race_id
     WHERE a.power_top IS NOT NULL          -- 初出走(能力未確定)は予想対象外
 ),
 adj AS (
@@ -195,14 +189,17 @@ adj AS (
         -- 道悪適性: 今日が道悪のみ発火。経験3走以上→複勝率で加減。未経験/少数は0(一律減点はしない)
         CASE WHEN track_condition IS NOT NULL AND track_condition <> '良' AND n_off >= 3
              THEN MAX(-4.0, MIN(3.0, ROUND((off_show-0.4)*6.0, 1)))
-             ELSE 0.0 END AS off_adj,
-        -- 斤量: 今日重いほど今日の時計は遅くなる → 減点(能力測定STEP1とは符号が逆)
-        CASE WHEN avg_wt IS NOT NULL
-             THEN ROUND(-(weight_carried - avg_wt)*0.8, 1) ELSE 0.0 END AS weight_adj
+             ELSE 0.0 END AS off_adj
     FROM base
 )
+-- predict = power_top + dist_adj + off_adj。
+--   ★斤量(weight_adj)は撤去: 下級では斤量が年齢/牝馬/見習いで決まり弱い馬ほど軽く、
+--     「軽い＝加点」が最弱馬を本命化して未勝利を半減(0.246→0.117)させたため。
+--   ★course_adj は集計で僅かにマイナス(能力が既にコースを織り込む)。参考表示のみで加算しない。
+--   道悪(全クラス僅かに+)と距離ペナルティ(理論整合・無害)のみ採用。
 SELECT
     race_id, horse_id, power_top,
-    course_adj, dist_adj, off_adj, weight_adj,
-    ROUND(power_top + course_adj + dist_adj + off_adj + weight_adj, 1) AS predict
+    course_adj,                       -- 参考: コース傾き(predictには非加算)
+    dist_adj, off_adj,
+    ROUND(power_top + dist_adj + off_adj, 1) AS predict
 FROM adj;
