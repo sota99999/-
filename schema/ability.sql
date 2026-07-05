@@ -59,3 +59,76 @@ SELECT
     -- 好走フラグ（3着内。能力集約では凡走を無視する）
     CASE WHEN fin <= 3 THEN 1 ELSE 0 END AS good
 FROM adj;
+
+
+-- =============================================================================
+-- v_ability: 各出走時点で「その馬の過去走だけ」を集約した6能力（STEP2）
+--   窓は features.sql と同じ ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING
+--   （＝当該レースを含めない＝リーク防止）。凡走は無視し好走(3着内)中心に集約。
+--
+--   ● power_top … 総合能力の主軸。好走時 quality_sp を「全走平均」へ縮約(shrinkage)。
+--       power_top = (n好走 * 好走平均q + K * 全走平均q) / (n好走 + K),  K=2
+--       → 好走1回だけの馬（例: 好走平均⭐の罠）は全走平均へ引き戻され吊り上げを防ぐ。
+--         天井(MAX)ではなく安定実力ベースなので"まぐれ図"にも汚染されにくい。
+--   ● shunpatsu … 瞬発力。好走時の上がり3F平均（小さいほど鋭い＝direction: 低いほど良）。
+--   ● jizoku   … 持続力。前傾(ハイ前半)＝ロングスパート戦で好走した時の quality_sp。
+--   ● toppspeed… トップスピード。良馬場好走時の quality_sp。
+--   ● power    … パワー。急坂 or 道悪 好走時の quality_sp。
+--   ● stamina  … スタミナ。中長距離(1800m〜)好走時の quality_sp と複勝率。
+--   ● start    … 先行力。平均隊列 avg_pos（小さいほど前）。
+--   ＋道悪/距離の複勝率とサンプル数（STEP3の適性判定・小サンプルガード用）。
+--   使い方: sqlite3 keiba.db < schema/ability.sql
+-- =============================================================================
+DROP VIEW IF EXISTS v_ability;
+
+CREATE VIEW v_ability AS
+WITH agg AS (
+    SELECT
+        race_id, horse_id, race_date, surface, distance, dist_band,
+        COUNT(*)        OVER w                                        AS runs_prior,
+        SUM(good)       OVER w                                        AS good_prior,
+        AVG(quality_sp) OVER w                                        AS all_avg_q,
+        AVG(CASE WHEN good=1 THEN quality_sp END) OVER w              AS good_avg_q,
+        -- 瞬発力: 好走時 上がり3F 平均（低いほど鋭い）
+        AVG(CASE WHEN good=1 THEN last_3f END) OVER w                 AS good_last3f,
+        -- 持続力: 前傾(ハイ前半)好走時の quality
+        AVG(CASE WHEN good=1 AND pace_fast > 0.5 THEN quality_sp END) OVER w AS jizoku_q,
+        SUM(CASE WHEN good=1 AND pace_fast > 0.5 THEN 1 ELSE 0 END) OVER w   AS n_jizoku_good,
+        -- トップスピード: 良馬場好走時の quality
+        AVG(CASE WHEN good=1 AND is_off=0 THEN quality_sp END) OVER w AS top_q,
+        -- パワー: 急坂 or 道悪 好走時の quality
+        AVG(CASE WHEN good=1 AND (hill_grade='steep' OR is_off=1) THEN quality_sp END) OVER w AS power_q,
+        -- スタミナ: 中長距離(mid/long=1800m〜)好走時の quality と複勝率
+        AVG(CASE WHEN good=1 AND dist_band IN ('mid','long') THEN quality_sp END) OVER w AS stamina_q,
+        SUM(CASE WHEN dist_band IN ('mid','long') THEN 1 ELSE 0 END) OVER w AS n_longish,
+        SUM(CASE WHEN dist_band IN ('mid','long') AND good=1 THEN 1 ELSE 0 END) OVER w AS n_long_good,
+        -- 道悪: 経験数と好走数（道悪適性・良/道悪2択の判定に使う）
+        SUM(CASE WHEN is_off=1 THEN 1 ELSE 0 END) OVER w             AS n_off,
+        SUM(CASE WHEN is_off=1 AND good=1 THEN 1 ELSE 0 END) OVER w  AS n_off_good,
+        -- 先行力: 平均隊列（小さいほど前）
+        ROUND(AVG(pos) OVER w, 3)                                    AS avg_pos
+    FROM v_run_adj
+    WINDOW w AS (PARTITION BY horse_id ORDER BY race_date
+                 ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING)
+)
+SELECT
+    race_id, horse_id, race_date, surface, distance, dist_band,
+    runs_prior, good_prior,
+    -- 総合能力（縮約）: 好走平均q を全走平均q へ K=2 で縮約
+    CASE WHEN all_avg_q IS NULL THEN NULL ELSE
+        ROUND((COALESCE(good_prior,0) * COALESCE(good_avg_q, all_avg_q) + 2.0 * all_avg_q)
+              / (COALESCE(good_prior,0) + 2.0), 1) END               AS power_top,
+    ROUND(good_last3f, 2)                                            AS shunpatsu,   -- 低いほど良
+    ROUND(jizoku_q, 1)                                              AS jizoku,
+    n_jizoku_good,
+    ROUND(top_q, 1)                                                AS toppspeed,
+    ROUND(power_q, 1)                                              AS power,
+    ROUND(stamina_q, 1)                                            AS stamina,
+    n_longish, n_long_good,
+    -- スタミナ複勝率（中長距離）
+    CASE WHEN n_longish > 0 THEN ROUND(1.0*n_long_good/n_longish, 3) END AS stamina_show,
+    n_off,
+    -- 道悪複勝率（経験2走以上で信頼）
+    CASE WHEN n_off > 0 THEN ROUND(1.0*n_off_good/n_off, 3) END      AS off_show,
+    avg_pos AS start
+FROM agg;
