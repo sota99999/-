@@ -110,14 +110,22 @@ WITH agg AS (
     FROM v_run_adj
     WINDOW w AS (PARTITION BY horse_id ORDER BY race_date
                  ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING)
-)
+),
+-- 全体の好走平均 quality（縮約の母集団プライア μ）。データから算出＝マジック定数を避ける
+mu AS (SELECT AVG(quality_sp) AS m FROM v_run_adj WHERE good = 1)
 SELECT
     race_id, horse_id, race_date, surface, distance, dist_band,
     runs_prior, good_prior,
-    -- 総合能力（縮約）: 好走平均q を全走平均q へ K=2 で縮約
-    CASE WHEN all_avg_q IS NULL THEN NULL ELSE
-        ROUND((COALESCE(good_prior,0) * COALESCE(good_avg_q, all_avg_q) + 2.0 * all_avg_q)
-              / (COALESCE(good_prior,0) + 2.0), 1) END               AS power_top,
+    -- 総合能力（経験的ベイズ縮約）:
+    --   power_top = (好走qの合計 + K×μ) / (好走数 + K)
+    --   K は好走数で可変: 好走2回以上=3、1回以下=8（単発フリーク図を強く母集団へ引き戻す）
+    --   → 「好走1回だけ超高値」の吊り上げ（ビザンチン118.3→15着の罠）を抑制。
+    --   初出走(runs_prior=0)は情報ゼロで NULL。
+    CASE WHEN runs_prior = 0 THEN NULL ELSE
+        ROUND((COALESCE(good_prior * good_avg_q, 0.0)
+               + (CASE WHEN good_prior >= 2 THEN 3.0 ELSE 8.0 END) * mu.m)
+              / (COALESCE(good_prior, 0) + CASE WHEN good_prior >= 2 THEN 3.0 ELSE 8.0 END),
+              1) END                                                 AS power_top,
     ROUND(good_last3f, 2)                                            AS shunpatsu,   -- 低いほど良
     ROUND(jizoku_q, 1)                                              AS jizoku,
     n_jizoku_good,
@@ -131,4 +139,4 @@ SELECT
     -- 道悪複勝率（経験2走以上で信頼）
     CASE WHEN n_off > 0 THEN ROUND(1.0*n_off_good/n_off, 3) END      AS off_show,
     avg_pos AS start
-FROM agg;
+FROM agg CROSS JOIN mu;
