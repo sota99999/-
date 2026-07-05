@@ -438,31 +438,30 @@ def _ability_table(sub: pd.DataFrame, names: dict, top: int = 0,
         cline = _course_line((course_map or {}).get(rid, {}))
         if cline:
             print(cline)
-        print(f"{'馬番':>3} {'馬名':<12}{plab:>7}{'印':<4}"
-              f"{slab:>7}{'印':<4}{'オッズ':>7}{fin_h}")
+        print(f"{'馬番':>3} {'馬名':<12}{plab:>7}{'印':<5}"
+              f"{slab + '(参考)':>10}{'オッズ':>7}{fin_h}")
         for _, r in g.iterrows():
             pv = _f(r.get(prim), pfmt)
             pm = (r.get("elo_mark") or "") + (r.get("elo_val") or "")
-            sv = _f(r.get(sec), "5.1f")
-            sm = (r.get("sp_mark") or "") + (r.get("sp_val") or "")
+            sv = _f(r.get(sec), "5.1f") + ((r.get("sp_mark") or "") == "⭐" and "⭐" or "")
             odds = _f(r.get("odds"), "6.1f")
             fin = ""
             if has_fin:
                 fv = pd.to_numeric(pd.Series([r.get("finish")]), errors="coerce").iloc[0]
                 fin = f"{int(fv):>5}" if pd.notna(fv) else f"{'-':>5}"
             print(f"{int(r['horse_number']):>3} {str(r['horse_name'])[:12]:<12}"
-                  f"{pv:>7}{pm:<4}{sv:>7}{sm:<4}{odds:>7}{fin}")
-    pdesc = ("反復レーティング＝誰に勝ったか(格・対戦網)。複勝軸"
+                  f"{pv:>7}{pm:<5}{sv:>10}{odds:>7}{fin}")
+    pdesc = ("反復レーティング＝どれくらい強い相手に勝ったか(格・対戦網)"
              if prim == "r_before" else "相手込みの総合実力(初期1500)")
-    sdesc = ("展開・斤量補正＋縮約の総合実力(時計)。単勝の補完"
+    sdesc = ("展開・斤量補正＋縮約の総合実力(時計)。参考"
              if sec == "power_top"
              else ("スピード指数の自己最高(天井)" if sec == "best_speed_prior"
                    else "好走時(3着内)だけの平均SP"))
-    print(f"\n※2指標のみ（融合せず併記）。{plab}={pdesc}、{slab}={sdesc}。"
-          f"すべて当該レース前の値。並びは{plab}順。")
-    print("※各指標で ⭐=特出(z≧1.5) / ◎○▲△=非特出の1〜4番手"
-          "(5番手以降も4番手と僅差なら△)。両方で高い馬が本命級。")
-    print("※✅=その指標の強さに対しオッズが割に合う妙味（指標ごと・期待値≧1.5）。")
+    print(f"\n※主指標は{plab}のみ（着差・時計は順位より弱く一本化）。{plab}={pdesc}。")
+    print(f"※{slab}は参考列（{sdesc}）。⭐=時計が特出。相対Rが高く時計も⭐なら妙味。")
+    print(f"※{plab}で ⭐=特出(z≧1.5) / ◎○▲△=非特出の1〜4番手"
+          "(5番手以降も4番手と僅差なら△) / ✅=オッズ妙味(期待値≧1.5)。並びは{}順。"
+          .format(plab))
     return 0
 
 
