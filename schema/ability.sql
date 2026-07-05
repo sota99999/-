@@ -98,6 +98,8 @@ WITH agg AS (
         AVG(CASE WHEN good=1 AND is_off=0 THEN quality_sp END) OVER w AS top_q,
         -- パワー: 急坂 or 道悪 好走時の quality
         AVG(CASE WHEN good=1 AND (hill_grade='steep' OR is_off=1) THEN quality_sp END) OVER w AS power_q,
+        SUM(CASE WHEN good=1 AND (hill_grade='steep' OR is_off=1) THEN 1 ELSE 0 END) OVER w AS n_pw_good,
+        SUM(CASE WHEN good=1 AND is_off=0 THEN 1 ELSE 0 END) OVER w   AS n_fast_good,
         -- スタミナ: 中長距離(mid/long=1800m〜)好走時の quality と複勝率
         AVG(CASE WHEN good=1 AND dist_band IN ('mid','long') THEN quality_sp END) OVER w AS stamina_q,
         SUM(CASE WHEN dist_band IN ('mid','long') THEN 1 ELSE 0 END) OVER w AS n_longish,
@@ -126,11 +128,15 @@ SELECT
                + (CASE WHEN good_prior >= 2 THEN 3.0 ELSE 8.0 END) * mu.m)
               / (COALESCE(good_prior, 0) + CASE WHEN good_prior >= 2 THEN 3.0 ELSE 8.0 END),
               1) END                                                 AS power_top,
+    -- 縮約前の総合好走平均（適性の傾きを同じ土俵で測る基準）
+    ROUND(good_avg_q, 1)                                            AS good_avg,
     ROUND(good_last3f, 2)                                            AS shunpatsu,   -- 低いほど良
     ROUND(jizoku_q, 1)                                              AS jizoku,
     n_jizoku_good,
     ROUND(top_q, 1)                                                AS toppspeed,
+    n_fast_good,
     ROUND(power_q, 1)                                              AS power,
+    n_pw_good,
     ROUND(stamina_q, 1)                                            AS stamina,
     n_longish, n_long_good,
     -- スタミナ複勝率（中長距離）
@@ -144,7 +150,11 @@ FROM agg CROSS JOIN mu;
 
 -- =============================================================================
 -- v_predict (STEP3 v1): 能力(power_top) に「今日の条件への適性」を掛け合わせた予想値
---   適性は v_ability の各能力の「自分の基準(power_top)からのズレ」＝傾きで表現。
+--   ★適性の傾きは sub能力 − good_avg（その馬の"縮約前"総合好走平均）で測る。
+--     power_top(縮約済)と生の sub能力を引き算すると縮約差＋少数ノイズが混じり、
+--     軽駒を過大評価して未勝利を壊した（0.710→0.203）。同じ土俵の good_avg 基準に統一。
+--   ★各適性は「その条件の好走が2走以上」ある時だけ発火（未満は0）。
+--     未勝利の大半は tilt=0 → predict≈power_top で能力の的中率を保つ。
 --   今回(v1)は コース適性 / 距離適性 / 道悪適性 / 斤量 まで。展開は次の増分。
 --   ※距離・馬場・斤量・コースは全てレース前に確定している情報なのでリーク無し。
 --   使い方: sqlite3 keiba.db < schema/ability.sql
@@ -157,8 +167,9 @@ WITH fw AS (   -- 各レースの平均斤量（今日の斤量補正の基準�
 ),
 base AS (
     SELECT
-        a.race_id, a.horse_id, a.power_top, a.start,
-        a.power, a.toppspeed, a.stamina, a.n_off, a.off_show,
+        a.race_id, a.horse_id, a.power_top, a.good_avg, a.start,
+        a.power, a.n_pw_good, a.toppspeed, a.n_fast_good,
+        a.stamina, a.n_long_good, a.n_off, a.off_show,
         ra.track_condition, ra.distance,
         CASE WHEN ra.distance < 1400 THEN 'sprint'
              WHEN ra.distance < 1800 THEN 'mile'
@@ -174,17 +185,16 @@ base AS (
 ),
 adj AS (
     SELECT base.*,
-        -- コース適性: 急坂→power傾き / 長い直線(>=450m)→toppspeed傾き
-        MAX(-5.0, MIN(5.0, ROUND(
-            CASE WHEN hill_grade='steep' AND power     IS NOT NULL THEN 0.4*(power    - power_top) ELSE 0 END
-          + CASE WHEN straight_m>=450   AND toppspeed IS NOT NULL THEN 0.3*(toppspeed- power_top) ELSE 0 END, 1))) AS course_adj,
-        -- 距離適性: 中長距離で stamina 不足なら大減点(非対称 最大-8, 上振れ+3)
-        CASE WHEN today_band IN ('mid','long') AND stamina IS NOT NULL
-             THEN MAX(-8.0, MIN(3.0, ROUND(0.5*(stamina - power_top), 1))) ELSE 0.0 END AS dist_adj,
-        -- 道悪適性: 今日が道悪のみ発火。経験2走以上→複勝率で加減、未経験→保留減点
-        CASE WHEN track_condition IS NOT NULL AND track_condition <> '良'
-             THEN CASE WHEN n_off >= 2 THEN MAX(-6.0, MIN(4.0, ROUND((off_show-0.4)*8.0, 1)))
-                       ELSE -1.0 END
+        -- コース適性: 急坂→power傾き(好走2走以上) / 長い直線(>=450m)→toppspeed傾き(良2走以上)
+        MAX(-4.0, MIN(4.0, ROUND(
+            CASE WHEN hill_grade='steep' AND n_pw_good  >= 2 THEN 0.35*(power    - good_avg) ELSE 0 END
+          + CASE WHEN straight_m>=450   AND n_fast_good >= 2 THEN 0.30*(toppspeed- good_avg) ELSE 0 END, 1))) AS course_adj,
+        -- 距離適性: 中長距離で中長距離好走2走以上のとき stamina 傾き(非対称 -6〜+3)
+        CASE WHEN today_band IN ('mid','long') AND n_long_good >= 2
+             THEN MAX(-6.0, MIN(3.0, ROUND(0.4*(stamina - good_avg), 1))) ELSE 0.0 END AS dist_adj,
+        -- 道悪適性: 今日が道悪のみ発火。経験3走以上→複勝率で加減。未経験/少数は0(一律減点はしない)
+        CASE WHEN track_condition IS NOT NULL AND track_condition <> '良' AND n_off >= 3
+             THEN MAX(-4.0, MIN(3.0, ROUND((off_show-0.4)*6.0, 1)))
              ELSE 0.0 END AS off_adj,
         -- 斤量: 今日重いほど今日の時計は遅くなる → 減点(能力測定STEP1とは符号が逆)
         CASE WHEN avg_wt IS NOT NULL
