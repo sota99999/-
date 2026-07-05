@@ -206,9 +206,14 @@ adj AS (
 --     「軽い＝加点」が最弱馬を本命化して未勝利を半減(0.246→0.117)させたため。
 --   ★course_adj は集計で僅かにマイナス(能力が既にコースを織り込む)。参考表示のみで加算しない。
 --   道悪(全クラス僅かに+)と距離ペナルティ(理論整合・無害)のみ採用。
+-- 検証結果: 斤量・展開・コースを予想値に足すと能力(power_top)を上回らずむしろ悪化
+--   （展開・斤量は STEP1 quality_sp で既に織り込み済み＝予想時の再加算は二重計上ノイズ）。
+--   予想値に採用するのは 距離ペナルティ + 道悪 のみ。コース傾き course_adj と
+--   展開 trip_adj は「人間の最終判断用の参考メモ」として列だけ残す(predict非加算)。
 SELECT
     race_id, horse_id, power_top,
-    course_adj,                       -- 参考: コース傾き(predictには非加算)
-    dist_adj, off_adj, trip_adj,
-    ROUND(power_top + dist_adj + off_adj + trip_adj, 1) AS predict
+    dist_adj, off_adj,
+    course_adj,                       -- 参考メモ: コース傾き(predict非加算)
+    trip_adj,                         -- 参考メモ: 展開・脚質(predict非加算)
+    ROUND(power_top + dist_adj + off_adj, 1) AS predict
 FROM adj;
