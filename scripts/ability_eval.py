@@ -87,6 +87,39 @@ def _odds_bucket(o) -> str:
     return "50〜"
 
 
+# --- コース地形の層別（v_course が必要）-------------------------------------
+STRAIGHT_ORDER = ["〜300m", "300-400m", "400-500m", "500m〜"]
+HILL_ORDER = ["急坂", "緩坂", "平坦"]
+TURN_ORDER = ["小回り", "広い", "直線"]
+_HILL_JP = {"steep": "急坂", "mild": "緩坂", "flat": "平坦"}
+_TURN_JP2 = {"tight": "小回り", "wide": "広い", "none": "直線"}
+
+
+def _straight_bucket(m) -> str:
+    m = pd.to_numeric(m, errors="coerce")
+    if pd.isna(m):
+        return ""
+    if m < 300:
+        return "〜300m"
+    if m < 400:
+        return "300-400m"
+    if m < 500:
+        return "400-500m"
+    return "500m〜"
+
+
+def _load_vcourse(db: str) -> pd.DataFrame:
+    """v_course（race_id→地形）を DataFrame で返す。無ければ空。"""
+    conn = sqlite3.connect(db)
+    try:
+        return pd.read_sql_query(
+            "SELECT race_id, straight_m, hill_grade, turn_size FROM v_course", conn)
+    except Exception:  # noqa: BLE001
+        return pd.DataFrame(columns=["race_id", "straight_m", "hill_grade", "turn_size"])
+    finally:
+        conn.close()
+
+
 def _print_combos(df: pd.DataFrame, title: str) -> None:
     nr = df["race_id"].nunique()
     print(f"\n【{title}】 {nr}レース / 印付き{len(df)}頭")
@@ -100,8 +133,9 @@ def main(argv=None) -> int:
     p.add_argument("--db", default="keiba.db")
     p.add_argument("--from", dest="date_from")
     p.add_argument("--to", dest="date_to")
-    p.add_argument("--by", help="層別バックテスト。class/venue/odds をカンマ区切りで指定"
-                                 "（例 --by class,venue,odds）。指定時は各層で9組み合わせを出す")
+    p.add_argument("--by", help="層別バックテスト。class/venue/odds/straight/hill/turn を"
+                                 "カンマ区切りで指定（例 --by straight,hill）。各層で9組み合わせを出す。"
+                                 "straight/hill/turn は course_master(v_course) が必要")
     args = p.parse_args(argv)
 
     df = mlcommon.load_data(args.db, None)
@@ -153,12 +187,25 @@ def main(argv=None) -> int:
         ran["_class"] = ran["class_level"].map(_class_bucket)
         ran["_venue"] = ran["venue_id"].map(lambda v: VENUE.get(str(v).zfill(2), str(v)))
         ran["_odds"] = ran["odds"].map(_odds_bucket)
+        # コース地形（v_course があれば結合）
+        vc = _load_vcourse(args.db)
+        if not vc.empty:
+            ran = ran.merge(vc, on="race_id", how="left")
+            ran["_straight"] = ran["straight_m"].map(_straight_bucket)
+            ran["_hill"] = ran["hill_grade"].map(lambda g: _HILL_JP.get(g, ""))
+            ran["_turn"] = ran["turn_size"].map(lambda t: _TURN_JP2.get(t, ""))
+        else:
+            ran["_straight"] = ran["_hill"] = ran["_turn"] = ""
         dims = {"class": ("クラス別", "_class", CLASS_ORDER),
                 "venue": ("競馬場別", "_venue", [VENUE[k] for k in sorted(VENUE)]),
-                "odds": ("オッズ帯別", "_odds", ODDS_ORDER)}
+                "odds": ("オッズ帯別", "_odds", ODDS_ORDER),
+                "straight": ("直線長別", "_straight", STRAIGHT_ORDER),
+                "hill": ("ゴール前坂別", "_hill", HILL_ORDER),
+                "turn": ("小回り/広い別", "_turn", TURN_ORDER)}
         for key in [d.strip() for d in args.by.split(",")]:
             if key not in dims:
-                print(f"\n[skip] 未知の層別キー: {key}（class/venue/odds のみ）"); continue
+                print(f"\n[skip] 未知の層別キー: {key}"
+                      "（class/venue/odds/straight/hill/turn）"); continue
             title, colname, order = dims[key]
             print(f"\n========== {title} ==========")
             present = [b for b in order if b in set(ran[colname])]

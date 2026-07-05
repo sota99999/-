@@ -74,7 +74,7 @@ INSERT INTO course_master
 CREATE VIEW v_course AS
 WITH r AS (
     SELECT
-        race_id, venue_id, distance,
+        race_id, venue_id, distance, race_name,
         CASE WHEN surface = '芝' THEN '芝' ELSE 'ダ' END AS surf,
         CASE
             WHEN surface <> '芝' THEN 'ダ'                                   -- ダートは内外なし
@@ -88,8 +88,9 @@ WITH r AS (
             -- 阪神
             WHEN venue_id='09' AND distance IN (1200,1400,2000,2200,2400,3000) THEN '内'
             WHEN venue_id='09' AND distance IN (1600,1800) THEN '外'
-            -- 新潟（1000=直線コース、2000は既定で外）
+            -- 新潟（1000=直線コース。2000は内外ともに存在するため、内回り重賞のみ内・他は外）
             WHEN venue_id='04' AND distance=1000 THEN '直'
+            WHEN venue_id='04' AND distance=2000 AND race_name LIKE '%新潟記念%' THEN '内'
             WHEN venue_id='04' AND distance IN (1200,1400,2200,2400) THEN '内'
             WHEN venue_id='04' AND distance IN (1600,1800,2000) THEN '外'
             ELSE '芝'                                                        -- 想定外は単一扱い(未一致になり得る)

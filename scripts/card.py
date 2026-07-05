@@ -278,6 +278,53 @@ def _f(v, fmt, default="  -"):
 # 能力指標（最高SP・Elo の2本立て）。(列, 見出し, 数値書式)
 ABILITY_COLS = [("best_speed_prior", "最高SP", "5.1f"),
                 ("elo_before", "Elo", "6.0f")]
+
+# コース形態の表示用（course_master / v_course があるとき）
+VENUE_JP = {"01": "札幌", "02": "函館", "03": "福島", "04": "新潟", "05": "東京",
+            "06": "中山", "07": "中京", "08": "京都", "09": "阪神", "10": "小倉"}
+_GRADE_JP = {"steep": "急坂", "mild": "緩坂", "flat": "平坦"}
+_TURN_JP = {"tight": "小回り", "wide": "広い", "none": "直線"}
+_PACE_JP = {"high": "ハイ傾向", "slow": "スロー傾向", "mid": ""}
+
+
+def _load_course_map(db: str, ids) -> dict:
+    """v_course から race_id→コース形態 dict を作る（無ければ空）。"""
+    try:
+        conn = sqlite3.connect(db)
+        q = ("SELECT race_id, venue_id, surface, distance, course_type, turn_dir, "
+             "straight_m, hill_m, hill_grade, turn_size, turf_type, pace_bias "
+             "FROM v_course WHERE race_id IN (%s)" % ",".join("?" * len(ids)))
+        rows = conn.execute(q, list(ids)).fetchall()
+        conn.close()
+    except Exception:  # noqa: BLE001  ビュー未作成など
+        return {}
+    cols = ["venue_id", "surface", "distance", "course_type", "turn_dir",
+            "straight_m", "hill_m", "hill_grade", "turn_size", "turf_type", "pace_bias"]
+    return {r[0]: dict(zip(cols, r[1:])) for r in rows}
+
+
+def _course_line(c: dict) -> str:
+    """コース形態を1行に整形。"""
+    if not c or c.get("straight_m") is None:
+        return ""
+    v = VENUE_JP.get(str(c["venue_id"]).zfill(2), c["venue_id"])
+    ct = c.get("course_type") or ""
+    ctd = ct if ct in ("内", "外", "直") else ""
+    parts = [f"{v}{c['surface']}{int(c['distance'])}{ctd}"]
+    if c.get("turn_dir"):
+        parts.append(f"{c['turn_dir']}回り")
+    parts.append(f"直線{c['straight_m']:.0f}m")
+    if c.get("hill_m") is not None:
+        parts.append(f"坂{c['hill_m']:.1f}m({_GRADE_JP.get(c.get('hill_grade'), '')})")
+    else:
+        parts.append(f"坂{_GRADE_JP.get(c.get('hill_grade'), '')}")
+    parts.append(_TURN_JP.get(c.get("turn_size"), ""))
+    if c.get("turf_type") == "noshiba":
+        parts.append("洋芝")
+    p = _PACE_JP.get(c.get("pace_bias"), "")
+    if p:
+        parts.append(p)
+    return "  〔コース〕 " + " ｜ ".join(x for x in parts if x)
 RANK_MARKS = ["◎", "○", "▲", "△"]   # 非特出の1〜4番手
 STANDOUT_Z = 1.5      # これ以上で「特出」⭐
 NEARTIE_Z = 0.25      # 5番手以降が4番手とこの差以内なら△（上位と近い値）
@@ -338,7 +385,8 @@ def _ability_marks(g: pd.DataFrame) -> pd.DataFrame:
     return g
 
 
-def _ability_table(sub: pd.DataFrame, names: dict, top: int = 0) -> int:
+def _ability_table(sub: pd.DataFrame, names: dict, top: int = 0,
+                   course_map: dict | None = None) -> int:
     """Elo・最高SP の2指標＋印（⭐◎○▲△・✅）＋オッズ（＋着順）を全頭表示する。
 
     印もモデル確率も使わず、_ability_marks の印だけを出す。
@@ -354,6 +402,9 @@ def _ability_table(sub: pd.DataFrame, names: dict, top: int = 0) -> int:
         if top:
             g = g.head(top)
         print(f"\n=== {rid}  {names.get(rid, '')} ===")
+        cline = _course_line((course_map or {}).get(rid, {}))
+        if cline:
+            print(cline)
         print(f"{'馬番':>3} {'馬名':<12}{'Elo':>6}{'印':<4}"
               f"{'最高SP':>7}{'印':<4}{'オッズ':>7}{fin_h}")
         for _, r in g.iterrows():
@@ -469,7 +520,8 @@ def main(argv=None) -> int:
             "WHERE finish_position IS NOT NULL", conn)
         conn.close()
         sub = sub.merge(fin, on=["race_id", "horse_id"], how="left")
-        return _ability_table(sub, names, args.top)
+        course_map = _load_course_map(args.db, sub["race_id"].unique().tolist())
+        return _ability_table(sub, names, args.top, course_map)
 
     # モデル予測（card と evaluate で共通の採点）
     sub = compute_scores(sub, bundle, show_bundle, weights, same_boost=args.same_boost)
