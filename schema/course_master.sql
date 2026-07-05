@@ -63,3 +63,42 @@ INSERT INTO course_master
 ('10','小倉','ダ','ダ','右',291.3,NULL,'flat',NULL,'tight','dirt','mid','小回り先行'),
 ('01','札幌','ダ','ダ','右',264.9,NULL,'flat',NULL,'wide','dirt','mid','洋芝開催のダート'),
 ('02','函館','ダ','ダ','右',260.3,NULL,'flat',NULL,'tight','dirt','mid','小回り先行');
+
+-- -----------------------------------------------------------------------------
+-- v_course: 各レース(races)にコース形態を紐づけるビュー。
+--   距離→コース区分(内/外/直)を解決して course_master をJOINする。
+--   内外のある芝は 中山06/京都08/阪神09/新潟04 のみ。他の芝は単一'芝'、ダートは'ダ'。
+--   ※新潟2000は内外どちらも存在するが距離だけでは判別不能のため既定=外。
+--     （新潟記念など内回り2000は個別に要修正）。想定外距離は未一致(NULL)。
+-- -----------------------------------------------------------------------------
+CREATE VIEW v_course AS
+WITH r AS (
+    SELECT
+        race_id, venue_id, distance,
+        CASE WHEN surface = '芝' THEN '芝' ELSE 'ダ' END AS surf,
+        CASE
+            WHEN surface <> '芝' THEN 'ダ'                                   -- ダートは内外なし
+            WHEN venue_id IN ('05','07','03','10','01','02') THEN '芝'        -- 内外の無い単一芝
+            -- 中山
+            WHEN venue_id='06' AND distance IN (1800,2000,2500,3600) THEN '内'
+            WHEN venue_id='06' AND distance IN (1200,1600,2200,4000) THEN '外'
+            -- 京都
+            WHEN venue_id='08' AND distance IN (1100,1200,2000,3000) THEN '内'
+            WHEN venue_id='08' AND distance IN (1400,1600,1800,2200,2400,3200) THEN '外'
+            -- 阪神
+            WHEN venue_id='09' AND distance IN (1200,1400,2000,2200,2400,3000) THEN '内'
+            WHEN venue_id='09' AND distance IN (1600,1800) THEN '外'
+            -- 新潟（1000=直線コース、2000は既定で外）
+            WHEN venue_id='04' AND distance=1000 THEN '直'
+            WHEN venue_id='04' AND distance IN (1200,1400,2200,2400) THEN '内'
+            WHEN venue_id='04' AND distance IN (1600,1800,2000) THEN '外'
+            ELSE '芝'                                                        -- 想定外は単一扱い(未一致になり得る)
+        END AS course_type
+    FROM races
+)
+SELECT r.race_id, r.venue_id, r.surf AS surface, r.distance, r.course_type,
+       cm.turn_dir, cm.straight_m, cm.hill_m, cm.hill_grade, cm.lap_m,
+       cm.turn_size, cm.turf_type, cm.pace_bias
+FROM r
+LEFT JOIN course_master cm
+  ON cm.venue_id = r.venue_id AND cm.surface = r.surf AND cm.course_type = r.course_type;
