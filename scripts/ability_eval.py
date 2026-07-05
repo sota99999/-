@@ -108,6 +108,40 @@ def _straight_bucket(m) -> str:
     return "500m〜"
 
 
+# --- 世代別・条件別（レース名＋class_levelから判定）--------------------------
+AGE_ORDER = ["2歳", "3歳", "3歳上", "4歳上", "不明"]
+_CLASS_SHORT = {1: "新馬", 2: "未勝利", 3: "1勝", 4: "2勝", 5: "3勝",
+                6: "OP・L", 7: "G3", 8: "G2", 9: "G1"}
+_AGE_PRE = {"2歳": "2歳", "3歳": "3歳", "3歳上": "3上", "4歳上": "4上"}
+COND_ORDER = ["2歳新馬", "2歳未勝利", "3歳新馬", "3歳未勝利",
+              "3歳1勝", "3歳2勝", "3歳OP・L",
+              "3上未勝利", "3上1勝", "3上2勝", "3上3勝", "3上OP・L",
+              "4上1勝", "4上2勝", "4上3勝", "4上OP・L",
+              "1勝", "2勝", "3勝", "OP・L", "G3", "G2", "G1", "その他"]
+
+
+def _age_bucket(name) -> str:
+    n = str(name or "")
+    if "２歳" in n or "2歳" in n:
+        return "2歳"
+    if "４歳以上" in n or "4歳以上" in n or "４歳上" in n:
+        return "4歳上"
+    if "３歳以上" in n or "3歳以上" in n or "３歳上" in n:
+        return "3歳上"
+    if "３歳" in n or "3歳" in n:
+        return "3歳"
+    return "不明"   # 特別・重賞は名称に年齢が無いことが多い
+
+
+def _cond_bucket(name, cl) -> str:
+    cls = _CLASS_SHORT.get(int(cl) if pd.notna(cl) else 0, "その他")
+    apre = _AGE_PRE.get(_age_bucket(name), "")
+    # 年齢が取れない特別/OP/重賞はクラスのみ（重賞・OPは年齢不明が普通）
+    if apre == "":
+        return cls
+    return f"{apre}{cls}"
+
+
 def _load_vcourse(db: str) -> pd.DataFrame:
     """v_course（race_id→地形）を DataFrame で返す。無ければ空。"""
     conn = sqlite3.connect(db)
@@ -196,12 +230,21 @@ def main(argv=None) -> int:
             ran["_turn"] = ran["turn_size"].map(lambda t: _TURN_JP2.get(t, ""))
         else:
             ran["_straight"] = ran["_hill"] = ran["_turn"] = ""
+        # 世代別・条件別（レース名＋class_level）
+        conn2 = sqlite3.connect(args.db)
+        rn = pd.read_sql_query("SELECT race_id, race_name FROM races", conn2)
+        conn2.close()
+        ran = ran.merge(rn, on="race_id", how="left")
+        ran["_age"] = ran["race_name"].map(_age_bucket)
+        ran["_cond"] = [_cond_bucket(n, c) for n, c in zip(ran["race_name"], ran["class_level"])]
         dims = {"class": ("クラス別", "_class", CLASS_ORDER),
                 "venue": ("競馬場別", "_venue", [VENUE[k] for k in sorted(VENUE)]),
                 "odds": ("オッズ帯別", "_odds", ODDS_ORDER),
                 "straight": ("直線長別", "_straight", STRAIGHT_ORDER),
                 "hill": ("ゴール前坂別", "_hill", HILL_ORDER),
-                "turn": ("小回り/広い別", "_turn", TURN_ORDER)}
+                "turn": ("小回り/広い別", "_turn", TURN_ORDER),
+                "age": ("世代別", "_age", AGE_ORDER),
+                "cond": ("条件別", "_cond", COND_ORDER)}
         for key in [d.strip() for d in args.by.split(",")]:
             if key not in dims:
                 print(f"\n[skip] 未知の層別キー: {key}"
