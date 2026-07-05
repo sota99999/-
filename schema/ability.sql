@@ -164,7 +164,7 @@ DROP VIEW IF EXISTS v_predict;
 CREATE VIEW v_predict AS
 WITH base AS (
     SELECT
-        a.race_id, a.horse_id, a.power_top, a.good_avg, a.start,
+        a.race_id, a.horse_id, a.power_top, a.good_avg, a.start, a.runs_prior,
         a.power, a.n_pw_good, a.toppspeed, a.n_fast_good,
         a.stamina, a.n_long_good, a.n_off, a.off_show,
         ra.track_condition, ra.distance,
@@ -189,7 +189,16 @@ adj AS (
         -- 道悪適性: 今日が道悪のみ発火。経験3走以上→複勝率で加減。未経験/少数は0(一律減点はしない)
         CASE WHEN track_condition IS NOT NULL AND track_condition <> '良' AND n_off >= 3
              THEN MAX(-4.0, MIN(3.0, ROUND((off_show-0.4)*6.0, 1)))
-             ELSE 0.0 END AS off_adj
+             ELSE 0.0 END AS off_adj,
+        -- 展開・脚質: コースの前後バイアス × その馬の脚質(start,小=前)。経験2走以上で発火。
+        --   先行有利(小回り/急坂/スロー・ミドル)→前を加点・後を減点／差し有利(直線>=450 or ハイ)→逆。
+        CASE WHEN runs_prior >= 2 AND start IS NOT NULL THEN
+            MAX(-2.5, MIN(2.5, ROUND(
+                (CASE WHEN straight_m >= 450 OR pace_bias = 'high' THEN -1.0            -- 差し有利
+                      WHEN turn_size = 'tight' OR hill_grade = 'steep'
+                           OR pace_bias IN ('slow','mid')          THEN  1.0            -- 先行有利
+                      ELSE 0.0 END) * (0.42 - start) * 5.5, 1)))
+            ELSE 0.0 END AS trip_adj
     FROM base
 )
 -- predict = power_top + dist_adj + off_adj。
@@ -200,6 +209,6 @@ adj AS (
 SELECT
     race_id, horse_id, power_top,
     course_adj,                       -- 参考: コース傾き(predictには非加算)
-    dist_adj, off_adj,
-    ROUND(power_top + dist_adj + off_adj, 1) AS predict
+    dist_adj, off_adj, trip_adj,
+    ROUND(power_top + dist_adj + off_adj + trip_adj, 1) AS predict
 FROM adj;
