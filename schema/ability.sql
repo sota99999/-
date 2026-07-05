@@ -140,3 +140,59 @@ SELECT
     CASE WHEN n_off > 0 THEN ROUND(1.0*n_off_good/n_off, 3) END      AS off_show,
     avg_pos AS start
 FROM agg CROSS JOIN mu;
+
+
+-- =============================================================================
+-- v_predict (STEP3 v1): 能力(power_top) に「今日の条件への適性」を掛け合わせた予想値
+--   適性は v_ability の各能力の「自分の基準(power_top)からのズレ」＝傾きで表現。
+--   今回(v1)は コース適性 / 距離適性 / 道悪適性 / 斤量 まで。展開は次の増分。
+--   ※距離・馬場・斤量・コースは全てレース前に確定している情報なのでリーク無し。
+--   使い方: sqlite3 keiba.db < schema/ability.sql
+-- =============================================================================
+DROP VIEW IF EXISTS v_predict;
+
+CREATE VIEW v_predict AS
+WITH fw AS (   -- 各レースの平均斤量（今日の斤量補正の基準）
+    SELECT race_id, AVG(weight_carried) AS avg_wt FROM results GROUP BY race_id
+),
+base AS (
+    SELECT
+        a.race_id, a.horse_id, a.power_top, a.start,
+        a.power, a.toppspeed, a.stamina, a.n_off, a.off_show,
+        ra.track_condition, ra.distance,
+        CASE WHEN ra.distance < 1400 THEN 'sprint'
+             WHEN ra.distance < 1800 THEN 'mile'
+             WHEN ra.distance < 2200 THEN 'mid' ELSE 'long' END AS today_band,
+        vc.hill_grade, vc.straight_m, vc.turn_size, vc.pace_bias,
+        r.weight_carried, fw.avg_wt
+    FROM v_ability a
+    JOIN races ra   ON ra.race_id = a.race_id
+    JOIN results r  ON r.race_id = a.race_id AND r.horse_id = a.horse_id
+    LEFT JOIN v_course vc ON vc.race_id = a.race_id
+    LEFT JOIN fw    ON fw.race_id = a.race_id
+    WHERE a.power_top IS NOT NULL          -- 初出走(能力未確定)は予想対象外
+),
+adj AS (
+    SELECT base.*,
+        -- コース適性: 急坂→power傾き / 長い直線(>=450m)→toppspeed傾き
+        MAX(-5.0, MIN(5.0, ROUND(
+            CASE WHEN hill_grade='steep' AND power     IS NOT NULL THEN 0.4*(power    - power_top) ELSE 0 END
+          + CASE WHEN straight_m>=450   AND toppspeed IS NOT NULL THEN 0.3*(toppspeed- power_top) ELSE 0 END, 1))) AS course_adj,
+        -- 距離適性: 中長距離で stamina 不足なら大減点(非対称 最大-8, 上振れ+3)
+        CASE WHEN today_band IN ('mid','long') AND stamina IS NOT NULL
+             THEN MAX(-8.0, MIN(3.0, ROUND(0.5*(stamina - power_top), 1))) ELSE 0.0 END AS dist_adj,
+        -- 道悪適性: 今日が道悪のみ発火。経験2走以上→複勝率で加減、未経験→保留減点
+        CASE WHEN track_condition IS NOT NULL AND track_condition <> '良'
+             THEN CASE WHEN n_off >= 2 THEN MAX(-6.0, MIN(4.0, ROUND((off_show-0.4)*8.0, 1)))
+                       ELSE -1.0 END
+             ELSE 0.0 END AS off_adj,
+        -- 斤量: 今日重いほど今日の時計は遅くなる → 減点(能力測定STEP1とは符号が逆)
+        CASE WHEN avg_wt IS NOT NULL
+             THEN ROUND(-(weight_carried - avg_wt)*0.8, 1) ELSE 0.0 END AS weight_adj
+    FROM base
+)
+SELECT
+    race_id, horse_id, power_top,
+    course_adj, dist_adj, off_adj, weight_adj,
+    ROUND(power_top + course_adj + dist_adj + off_adj + weight_adj, 1) AS predict
+FROM adj;
