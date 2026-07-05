@@ -46,19 +46,29 @@ def _row(label: str, s: dict) -> str:
 
 
 # 指定の9組み合わせ（Elo側・SP側の印）。df から真偽マスクのリストを作る
+def _ind_labels(df: pd.DataFrame) -> tuple[str, str]:
+    """主軸/相補の短縮見出し。相対R・能力があれば R/力、無ければ Elo/SP。"""
+    pl = "R" if ("r_before" in df.columns
+                 and pd.to_numeric(df["r_before"], errors="coerce").notna().any()) else "Elo"
+    sl = "力" if ("power_top" in df.columns
+                  and pd.to_numeric(df["power_top"], errors="coerce").notna().any()) else "SP"
+    return pl, sl
+
+
 def _combo_masks(df: pd.DataFrame) -> list[tuple[str, pd.Series]]:
     sp_m = df["sp_mark"]; el_m = df["elo_mark"]
     sp_v = df["sp_val"]; el_v = df["elo_val"]
+    pl, sl = _ind_labels(df)   # 主軸(相対R/Elo) と 相補(能力/SP)
     return [
-        ("Elo⭐ SP⭐", (el_m == "⭐") & (sp_m == "⭐")),
-        ("Elo⭐ SP◎", (el_m == "⭐") & (sp_m == "◎")),
-        ("Elo◎ SP⭐", (el_m == "◎") & (sp_m == "⭐")),
-        ("Elo◎ SP◎", (el_m == "◎") & (sp_m == "◎")),
-        ("Elo✅ SP✅", (el_v == "✅") & (sp_v == "✅")),
-        ("Elo⭐ SP✅", (el_m == "⭐") & (sp_v == "✅")),
-        ("Elo✅ SP⭐", (el_v == "✅") & (sp_m == "⭐")),
-        ("Elo◎ SP✅", (el_m == "◎") & (sp_v == "✅")),
-        ("Elo✅ SP◎", (el_v == "✅") & (sp_m == "◎")),
+        (f"{pl}⭐ {sl}⭐", (el_m == "⭐") & (sp_m == "⭐")),
+        (f"{pl}⭐ {sl}◎", (el_m == "⭐") & (sp_m == "◎")),
+        (f"{pl}◎ {sl}⭐", (el_m == "◎") & (sp_m == "⭐")),
+        (f"{pl}◎ {sl}◎", (el_m == "◎") & (sp_m == "◎")),
+        (f"{pl}✅ {sl}✅", (el_v == "✅") & (sp_v == "✅")),
+        (f"{pl}⭐ {sl}✅", (el_m == "⭐") & (sp_v == "✅")),
+        (f"{pl}✅ {sl}⭐", (el_v == "✅") & (sp_m == "⭐")),
+        (f"{pl}◎ {sl}✅", (el_m == "◎") & (sp_v == "✅")),
+        (f"{pl}✅ {sl}◎", (el_v == "✅") & (sp_m == "◎")),
     ]
 
 
@@ -191,6 +201,14 @@ def main(argv=None) -> int:
         "WHERE finish_position IS NOT NULL", conn)
     place_pay = pd.read_sql_query(
         "SELECT race_id, combination, payout FROM payouts WHERE bet_type = '複勝'", conn)
+    # 新2指標（相対R・能力power_top）を結合。無ければ card 側が Elo/最高SP にフォールバック
+    ability_extra = []
+    for tbl, col in (("v_ability", "power_top"), ("horse_relative_r", "r_before")):
+        try:
+            ability_extra.append(pd.read_sql_query(
+                f"SELECT race_id, horse_id, {col} FROM {tbl}", conn))
+        except Exception:  # noqa: BLE001  テーブル未作成
+            pass
     conn.close()
     place_pay["hn"] = pd.to_numeric(place_pay["combination"], errors="coerce")
     pmap = {(r, h): p for r, h, p in
@@ -200,6 +218,8 @@ def main(argv=None) -> int:
     if sub.empty:
         print("対象レースがありません（結果確定・期間指定を確認）"); return 0
     sub = sub.merge(actual, on=["race_id", "horse_id"], how="left")
+    for extra in ability_extra:
+        sub = sub.merge(extra, on=["race_id", "horse_id"], how="left")
     sub["odds"] = pd.to_numeric(sub.get("odds"), errors="coerce")
     hn = pd.to_numeric(sub["horse_number"], errors="coerce")
     sub["place_payout"] = [pmap.get((r, h)) for r, h in zip(sub["race_id"], hn)]
@@ -214,9 +234,10 @@ def main(argv=None) -> int:
     cov = (pd.to_numeric(placed.get("place_payout"), errors="coerce").notna().mean()
            if len(placed) else 0.0)
     dmin = sub["race_date"].min(); dmax = sub["race_date"].max()
-    splab = card.SP_LABEL.get(sp_col, "SP")
+    prim_col = card._prim_col(sub); sec_col = card._sec_col(sub, sp_col)
+    plab, slab = card._ind_label(prim_col), card._ind_label(sec_col)
     print(f"\n=== 能力2指標の印別 回顧（{args.date_from or '最初'}〜{args.date_to or '最後'}） ===")
-    print(f"対象レース数: {n_races}（結果確定 / 実日付 {dmin}〜{dmax}）／ SP指標=【{splab}】")
+    print(f"対象レース数: {n_races}（結果確定 / 実日付 {dmin}〜{dmax}）／ 主軸=【{plab}】相補=【{slab}】")
     print(f"複勝払戻カバー率: {cov*100:.0f}%（低いと『複回収』は過小評価。単回収・的中率は影響なし）")
 
     if args.by:
@@ -266,7 +287,7 @@ def main(argv=None) -> int:
               "本数が少ない層は数字が振れるので n を見て判断。")
         return 0
 
-    for key, label in (("elo", "Elo"), ("sp", splab)):
+    for key, label in (("elo", plab), ("sp", slab)):
         print(f"\n― {label} の印 ―")
         print(HEAD)
         for mk in ["⭐", "◎", "○", "▲", "△"]:
