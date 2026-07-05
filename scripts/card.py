@@ -335,19 +335,47 @@ VALUE_MINZ = 0.5      # かつ指標で平均より明確に上（過剰な大�
 SP_COLS = {"ceiling": "best_speed_prior", "good": "good_avg_speed_prior"}
 SP_LABEL = {"best_speed_prior": "最高SP", "good_avg_speed_prior": "好走平均"}
 
+# 新・能力2指標（融合せず併記）:
+#   主軸 = 相対R(r_before): 反復strength-of-scheduleレーティング。誰に勝ったか＝格。
+#          複勝/BOXで全クラス優位。無ければ従来の Elo(elo_before) にフォールバック。
+#   相補 = 能力(power_top): 展開・斤量補正＋経験的ベイズ縮約の総合実力(時計)。
+#          未勝利・重賞の単勝1点で優位。無ければ従来の最高SP にフォールバック。
+# 内部キーは既存の "elo"/"sp"（＝主軸/相補）を流用し、9分類・列名の互換を保つ。
+
+
+def _has(g: pd.DataFrame, col: str) -> bool:
+    """列が存在し数値が1つでも入っているか。"""
+    return col in g.columns and pd.to_numeric(g[col], errors="coerce").notna().any()
+
+
+def _prim_col(g: pd.DataFrame) -> str:
+    """主軸列を解決（相対R優先、無ければElo）。"""
+    return "r_before" if _has(g, "r_before") else "elo_before"
+
+
+def _sec_col(g: pd.DataFrame, sp_col: str = "best_speed_prior") -> str:
+    """相補列を解決（能力power_top優先、無ければ指定SP列）。"""
+    return "power_top" if _has(g, "power_top") else sp_col
+
+
+def _ind_label(col: str) -> str:
+    """指標列→見出し。"""
+    return {"r_before": "相対R", "elo_before": "Elo",
+            "power_top": "能力"}.get(col, SP_LABEL.get(col, "SP"))
+
 
 def _ability_marks(g: pd.DataFrame, sp_col: str = "best_speed_prior") -> pd.DataFrame:
-    """Elo・SP の2指標で、レース内に印を付けて返す（表示・評価で共通）。
+    """主軸(相対R/Elo)・相補(能力/SP) の2指標で、レース内に印を付けて返す。
 
-    印は正規化した列に入れる:  elo_mark/elo_val/elo_z、sp_mark/sp_val/sp_z。
-    SP指標の中身は sp_col で切替（best_speed_prior=天井 / good_avg_speed_prior=好走平均）。
+    印は正規化した列に入れる:  elo_mark/elo_val/elo_z（主軸）、sp_mark/sp_val/sp_z（相補）。
+    列名キーは互換のため elo/sp のままだが、中身は相対R/能力（無ければElo/SP）。
       ⭐ = 特出（出走馬中 z≧1.5）／◎○▲△ = 特出を除く上位1〜4番手
       △(追加) = 5番手以降でも4番手と僅差（z差≦0.25）なら△
-    オッズがあれば、各指標の強さに対しオッズが割に合う馬へ ✅。
+    オッズがあれば、各指標の強さに対しオッズが割に合う馬へ ✅。いずれも高いほど良。
     """
     g = g.copy()
     odds = pd.to_numeric(g.get("odds"), errors="coerce")
-    for key, col in (("elo", "elo_before"), ("sp", sp_col)):
+    for key, col in (("elo", _prim_col(g)), ("sp", _sec_col(g, sp_col))):
         mark = pd.Series("", index=g.index)
         v = pd.to_numeric(g.get(col), errors="coerce")
         valid = v.notna()
@@ -397,36 +425,43 @@ def _ability_table(sub: pd.DataFrame, names: dict, top: int = 0,
     has_fin = "finish" in sub.columns and pd.to_numeric(
         sub["finish"], errors="coerce").notna().any()
     fin_h = f"{'着順':>5}" if has_fin else ""
-    splab = SP_LABEL.get(sp_col, "SP")
+    prim = _prim_col(sub)                    # 主軸(相対R or Elo)
+    sec = _sec_col(sub, sp_col)              # 相補(能力 or SP)
+    plab, slab = _ind_label(prim), _ind_label(sec)
+    pfmt = "6.1f" if prim == "r_before" else "5.0f"
     for rid, g in sub.groupby("race_id"):
         g = _ability_marks(g, sp_col)
-        g = g.sort_values("elo_before", ascending=False, na_position="last")
+        g = g.sort_values(prim, ascending=False, na_position="last")
         if top:
             g = g.head(top)
         print(f"\n=== {rid}  {names.get(rid, '')} ===")
         cline = _course_line((course_map or {}).get(rid, {}))
         if cline:
             print(cline)
-        print(f"{'馬番':>3} {'馬名':<12}{'Elo':>6}{'印':<4}"
-              f"{splab:>7}{'印':<4}{'オッズ':>7}{fin_h}")
+        print(f"{'馬番':>3} {'馬名':<12}{plab:>7}{'印':<4}"
+              f"{slab:>7}{'印':<4}{'オッズ':>7}{fin_h}")
         for _, r in g.iterrows():
-            elo = _f(r.get("elo_before"), "5.0f")
-            elom = (r.get("elo_mark") or "") + (r.get("elo_val") or "")
-            sp = _f(r.get(sp_col), "5.1f")
-            spm = (r.get("sp_mark") or "") + (r.get("sp_val") or "")
+            pv = _f(r.get(prim), pfmt)
+            pm = (r.get("elo_mark") or "") + (r.get("elo_val") or "")
+            sv = _f(r.get(sec), "5.1f")
+            sm = (r.get("sp_mark") or "") + (r.get("sp_val") or "")
             odds = _f(r.get("odds"), "6.1f")
             fin = ""
             if has_fin:
                 fv = pd.to_numeric(pd.Series([r.get("finish")]), errors="coerce").iloc[0]
                 fin = f"{int(fv):>5}" if pd.notna(fv) else f"{'-':>5}"
             print(f"{int(r['horse_number']):>3} {str(r['horse_name'])[:12]:<12}"
-                  f"{elo:>6}{elom:<4}{sp:>7}{spm:<4}{odds:>7}{fin}")
-    spdesc = ("スピード指数の自己最高(天井)" if sp_col == "best_speed_prior"
-              else "好走時(3着内)だけの平均SP(まぐれ天井を除いた実力)")
-    print(f"\n※2指標のみ。Elo=相手込みの総合実力(初期1500)、{splab}={spdesc}。"
-          "すべて当該レース前の値。並びはElo順。")
+                  f"{pv:>7}{pm:<4}{sv:>7}{sm:<4}{odds:>7}{fin}")
+    pdesc = ("反復レーティング＝誰に勝ったか(格・対戦網)。複勝軸"
+             if prim == "r_before" else "相手込みの総合実力(初期1500)")
+    sdesc = ("展開・斤量補正＋縮約の総合実力(時計)。単勝の補完"
+             if sec == "power_top"
+             else ("スピード指数の自己最高(天井)" if sec == "best_speed_prior"
+                   else "好走時(3着内)だけの平均SP"))
+    print(f"\n※2指標のみ（融合せず併記）。{plab}={pdesc}、{slab}={sdesc}。"
+          f"すべて当該レース前の値。並びは{plab}順。")
     print("※各指標で ⭐=特出(z≧1.5) / ◎○▲△=非特出の1〜4番手"
-          "(5番手以降も4番手と僅差なら△)。")
+          "(5番手以降も4番手と僅差なら△)。両方で高い馬が本命級。")
     print("※✅=その指標の強さに対しオッズが割に合う妙味（指標ごと・期待値≧1.5）。")
     return 0
 
@@ -523,6 +558,14 @@ def main(argv=None) -> int:
         fin = pd.read_sql_query(
             "SELECT race_id, horse_id, finish_position AS finish FROM results "
             "WHERE finish_position IS NOT NULL", conn)
+        # 新・能力2指標を結合（無ければ従来のElo/最高SPにフォールバック）
+        for tbl, col in (("v_ability", "power_top"), ("horse_relative_r", "r_before")):
+            try:
+                extra = pd.read_sql_query(
+                    f"SELECT race_id, horse_id, {col} FROM {tbl}", conn)
+                sub = sub.merge(extra, on=["race_id", "horse_id"], how="left")
+            except Exception:  # noqa: BLE001  テーブル未作成時は従来指標のまま
+                pass
         conn.close()
         sub = sub.merge(fin, on=["race_id", "horse_id"], how="left")
         course_map = _load_course_map(args.db, sub["race_id"].unique().tolist())
