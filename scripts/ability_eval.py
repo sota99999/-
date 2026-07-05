@@ -47,8 +47,8 @@ def _row(label: str, s: dict) -> str:
 
 # 指定の9組み合わせ（Elo側・SP側の印）。df から真偽マスクのリストを作る
 def _combo_masks(df: pd.DataFrame) -> list[tuple[str, pd.Series]]:
-    sp_m = df["best_speed_prior_mark"]; el_m = df["elo_before_mark"]
-    sp_v = df["best_speed_prior_val"]; el_v = df["elo_before_val"]
+    sp_m = df["sp_mark"]; el_m = df["elo_mark"]
+    sp_v = df["sp_val"]; el_v = df["elo_val"]
     return [
         ("Elo⭐ SP⭐", (el_m == "⭐") & (sp_m == "⭐")),
         ("Elo⭐ SP◎", (el_m == "⭐") & (sp_m == "◎")),
@@ -170,7 +170,10 @@ def main(argv=None) -> int:
     p.add_argument("--by", help="層別バックテスト。class/venue/odds/straight/hill/turn を"
                                  "カンマ区切りで指定（例 --by straight,hill）。各層で9組み合わせを出す。"
                                  "straight/hill/turn は course_master(v_course) が必要")
+    p.add_argument("--sp-col", choices=["ceiling", "good"], default="ceiling",
+                   help="SP指標: ceiling=最高SP(天井,既定) / good=好走平均SP")
     args = p.parse_args(argv)
+    sp_col = card.SP_COLS.get(args.sp_col, "best_speed_prior")
 
     df = mlcommon.load_data(args.db, None)
     conn = sqlite3.connect(args.db)
@@ -201,7 +204,7 @@ def main(argv=None) -> int:
     hn = pd.to_numeric(sub["horse_number"], errors="coerce")
     sub["place_payout"] = [pmap.get((r, h)) for r, h in zip(sub["race_id"], hn)]
 
-    marked = [card._ability_marks(g) for _, g in sub.groupby("race_id")]
+    marked = [card._ability_marks(g, sp_col) for _, g in sub.groupby("race_id")]
     sub = pd.concat(marked, ignore_index=True)
     ran = sub[sub["finish"].notna()].copy()
 
@@ -211,8 +214,9 @@ def main(argv=None) -> int:
     cov = (pd.to_numeric(placed.get("place_payout"), errors="coerce").notna().mean()
            if len(placed) else 0.0)
     dmin = sub["race_date"].min(); dmax = sub["race_date"].max()
+    splab = card.SP_LABEL.get(sp_col, "SP")
     print(f"\n=== 能力2指標の印別 回顧（{args.date_from or '最初'}〜{args.date_to or '最後'}） ===")
-    print(f"対象レース数: {n_races}（結果確定 / 実日付 {dmin}〜{dmax}）")
+    print(f"対象レース数: {n_races}（結果確定 / 実日付 {dmin}〜{dmax}）／ SP指標=【{splab}】")
     print(f"複勝払戻カバー率: {cov*100:.0f}%（低いと『複回収』は過小評価。単回収・的中率は影響なし）")
 
     if args.by:
@@ -262,11 +266,11 @@ def main(argv=None) -> int:
               "本数が少ない層は数字が振れるので n を見て判断。")
         return 0
 
-    for col, label, _ in card.ABILITY_COLS:
+    for key, label in (("elo", "Elo"), ("sp", splab)):
         print(f"\n― {label} の印 ―")
         print(HEAD)
         for mk in ["⭐", "◎", "○", "▲", "△"]:
-            print(_row(mk, _summ(ran[ran[col + "_mark"] == mk])))
+            print(_row(mk, _summ(ran[ran[key + "_mark"] == mk])))
 
     print("\n― 2指標の組み合わせ ―")
     print(HEAD)
