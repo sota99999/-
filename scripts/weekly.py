@@ -31,6 +31,10 @@ from pathlib import Path
 import scraper
 import crawler
 import compute_ratings
+import compute_relative_r
+import collect_laps
+import update_odds
+import card
 import train_predict
 import predict
 
@@ -53,11 +57,13 @@ def last_finished_date(db: str) -> str | None:
 
 
 def apply_features(db: str) -> None:
-    """schema/features.sql を適用して v_features を作り直す（sqlite3 CLI不要）。"""
-    sql = (ROOT / "schema" / "features.sql").read_text(encoding="utf-8")
+    """schema の各ビューを適用（features → course_master → ability の依存順）。"""
     conn = sqlite3.connect(db)
     try:
-        conn.executescript(sql)
+        for name in ("features.sql", "course_master.sql", "ability.sql"):
+            path = ROOT / "schema" / name
+            if path.exists():
+                conn.executescript(path.read_text(encoding="utf-8"))
         conn.commit()
     finally:
         conn.close()
@@ -69,6 +75,7 @@ def main(argv=None) -> int:
     p.add_argument("--raceday", help="予想したい開催日 (YYYY-MM-DD)。省略時は予想せず更新のみ")
     p.add_argument("--since", help="結果収集の開始日 (YYYY-MM-DD)。省略時は前回収集日から")
     p.add_argument("--retrain", action="store_true", help="モデルを再学習する")
+    p.add_argument("--ml", action="store_true", help="MLモデル予想も出す（既定は確定版カードのみ）")
     p.add_argument("--bankroll", type=float, default=None, help="ケリー資金配分に使う資金額")
     p.add_argument("--win-model", default="model_win.pkl")
     p.add_argument("--show-model", default="model_show.pkl")
@@ -87,21 +94,33 @@ def main(argv=None) -> int:
         steps.append((f"② 出馬表を収集 {args.raceday}（全レース）",
                       ["--db", args.db, "--shutuba", "--date", args.raceday],
                       crawler.main))
-    steps.append(("③ Eloレーティング再計算", ["--db", args.db], compute_ratings.main))
-    steps.append(("④ 特徴量ビュー再作成", None, lambda _a=None: apply_features(args.db)))
+    if args.raceday:
+        steps.append((f"②' 最新オッズを取得 {args.raceday}",
+                      ["--db", args.db, "--date", args.raceday], update_odds.main))
+    steps.append((f"③ ラップ収集 {start}〜{today}",
+                  ["--db", args.db, "--from", start, "--to", today], collect_laps.main))
+    steps.append(("④ Eloレーティング再計算", ["--db", args.db], compute_ratings.main))
+    steps.append(("④' 相対R再計算(perf/pstd/pmax)", ["--db", args.db],
+                  compute_relative_r.main))
+    steps.append(("⑤ スキーマ適用(features/course/ability)",
+                  None, lambda _a=None: apply_features(args.db)))
     if args.retrain:
-        steps.append(("⑤ 単勝モデル再学習",
+        steps.append(("⑥ 単勝モデル再学習",
                       ["--db", args.db, "--calibrate", "isotonic", "--save-model", args.win_model],
                       train_predict.main))
-        steps.append(("⑤ 複勝モデル再学習",
+        steps.append(("⑥ 複勝モデル再学習",
                       ["--db", args.db, "--target", "target_show", "--calibrate", "isotonic",
                        "--save-model", args.show_model],
                       train_predict.main))
     if args.raceday:
-        pred_args = ["--db", args.db, "--model", args.win_model]
-        if args.bankroll is not None:
-            pred_args += ["--bankroll", str(args.bankroll)]
-        steps.append((f"⑥ {args.raceday} の全レースを予想（単勝モデル）", pred_args, predict.main))
+        steps.append((f"⑦ {args.raceday} 確定版カード（相対R＋条件補正）",
+                      ["--db", args.db, "--ability-only", "--date", args.raceday],
+                      card.main))
+        if args.ml:
+            pred_args = ["--db", args.db, "--model", args.win_model]
+            if args.bankroll is not None:
+                pred_args += ["--bankroll", str(args.bankroll)]
+            steps.append((f"⑧ MLモデル予想(参考)", pred_args, predict.main))
 
     print(f"=== weekly: DB={args.db} / 予想日={args.raceday or '(なし)'} / 再学習={args.retrain} ===")
     for i, (label, sargs, func) in enumerate(steps, 1):
