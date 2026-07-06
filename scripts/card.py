@@ -436,12 +436,14 @@ def _ability_marks(g: pd.DataFrame, sp_col: str = "best_speed_prior") -> pd.Data
         if z.notna().any():
             standout = valid & (z >= STANDOUT_Z)
             mark[standout] = "⭐"
+            n_star = int(standout.sum())   # ⭐が上位枠を埋め、◎○▲△はその後ろから
             rest = sorted(g.index[valid & ~standout], key=lambda i: v[i], reverse=True)
             rank4_z = None
             for k, idx in enumerate(rest):
-                if k < 4:
-                    mark[idx] = RANK_MARKS[k]
-                    if k == 3:
+                pos = k + n_star           # ⭐1頭→○から / ⭐2頭→▲から
+                if pos < 4:
+                    mark[idx] = RANK_MARKS[pos]
+                    if pos == 3:
                         rank4_z = z[idx]
                 elif rank4_z is not None and (rank4_z - z[idx]) <= NEARTIE_Z:
                     mark[idx] = "△"
@@ -531,9 +533,9 @@ def _ability_table(sub: pd.DataFrame, names: dict, top: int = 0,
               "馬は条件が向けば一発ある(参考・スコア非加算)。")
     print("※印「条」=ムラ馬(実力点のばらつき大)を、今回条件に合致した過去走だけで再評価した値。")
     print(f"※{slab}は参考列（{sdesc}）。⭐=時計が特出。相対Rが高く時計も⭐なら妙味。")
-    print(f"※{plab}で ⭐=特出(z≧1.5) / ◎○▲△=非特出の1〜4番手"
-          "(5番手以降も4番手と僅差なら△) / ✅=オッズ妙味(期待値≧1.5)。並びは{}順。"
-          .format(plab))
+    print(f"※{plab}で ⭐=特出(z≧1.5)＝最上位枠。◎○▲△は⭐の後ろから順に"
+          "(⭐1頭なら○から/2頭なら▲から。5番手以降も僅差なら△) / "
+          "✅=オッズ妙味(期待値≧1.5)。並びは{}順。".format(plab))
     print("※ﾄｯﾌﾟ/瞬発/持続/ﾊﾟﾜｰ/ｽﾀﾐﾅ=好走時の実力値(quality)、距離/道悪=複勝率、"
           "先行=平均隊列。※瞬発(上がり3F)と先行(隊列)は小さいほど良、他は大きいほど良。"
           "そのレースに効く能力・適性だけを表示(参考・スコア非加算)。")
