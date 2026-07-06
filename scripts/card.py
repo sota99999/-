@@ -291,16 +291,57 @@ def _load_course_map(db: str, ids) -> dict:
     """v_course から race_id→コース形態 dict を作る（無ければ空）。"""
     try:
         conn = sqlite3.connect(db)
-        q = ("SELECT race_id, venue_id, surface, distance, course_type, turn_dir, "
-             "straight_m, hill_m, hill_grade, turn_size, turf_type, pace_bias "
-             "FROM v_course WHERE race_id IN (%s)" % ",".join("?" * len(ids)))
+        q = ("SELECT vc.race_id, vc.venue_id, vc.surface, vc.distance, vc.course_type, "
+             "vc.turn_dir, vc.straight_m, vc.hill_m, vc.hill_grade, vc.turn_size, "
+             "vc.turf_type, vc.pace_bias, ra.track_condition "
+             "FROM v_course vc JOIN races ra ON ra.race_id = vc.race_id "
+             "WHERE vc.race_id IN (%s)" % ",".join("?" * len(ids)))
         rows = conn.execute(q, list(ids)).fetchall()
         conn.close()
     except Exception:  # noqa: BLE001  ビュー未作成など
         return {}
     cols = ["venue_id", "surface", "distance", "course_type", "turn_dir",
-            "straight_m", "hill_m", "hill_grade", "turn_size", "turf_type", "pace_bias"]
+            "straight_m", "hill_m", "hill_grade", "turn_size", "turf_type",
+            "pace_bias", "track_condition"]
     return {r[0]: dict(zip(cols, r[1:])) for r in rows}
+
+
+# レース条件→参考表示する能力・適性（列名, 見出し, 数値書式, 低いほど良か）
+ABILITY_META = {
+    "toppspeed":    ("ﾄｯﾌﾟ", "5.1f", False),
+    "shunpatsu":    ("瞬発", "4.1f", True),    # 上がり3F 低いほど鋭い
+    "jizoku":       ("持続", "5.1f", False),
+    "power":        ("ﾊﾟﾜｰ", "5.1f", False),
+    "stamina":      ("ｽﾀﾐﾅ", "5.1f", False),
+    "start":        ("先行", "4.2f", True),    # 隊列 低いほど前
+    "stamina_show": ("距離", "4.2f", False),   # 中長距離 複勝率
+    "off_show":     ("道悪", "4.2f", False),   # 道悪 複勝率
+}
+
+
+def _relevant_abilities(c: dict, distance, going) -> list:
+    """レースのコース形態・距離・馬場から、参考表示する能力/適性キー列を選ぶ。"""
+    out: list[str] = []
+    st = c.get("straight_m") or 0
+    hill = c.get("hill_grade")
+    turn = c.get("turn_size")
+    if st >= 480:                       # 長い直線(東京・新潟外・阪神外) → キレ
+        out += ["toppspeed", "shunpatsu"]
+    if hill == "steep":                 # 急坂(中山・阪神内・中京) → パワー
+        out += ["power"]
+    if turn == "tight":                 # 小回り(函館・札幌・小倉・福島 等) → 先行力
+        out += ["start"]
+    if hill == "flat" and turn == "wide":  # 平坦広い(京都外) → ロングスパート持続
+        out += ["jizoku"]
+    if distance and distance >= 2200:   # 長距離 → スタミナ・距離適性
+        out += ["stamina", "stamina_show"]
+    if going and going != "良":          # 道悪 → 道悪適性
+        out += ["off_show"]
+    seen = set(); ded = []
+    for k in out:
+        if k not in seen:
+            seen.add(k); ded.append(k)
+    return ded
 
 
 def _course_line(c: dict) -> str:
@@ -431,30 +472,45 @@ def _ability_table(sub: pd.DataFrame, names: dict, top: int = 0,
     pfmt = "6.1f" if prim == "r_before" else "5.0f"
     has_pmax = _has(sub, "pmax")            # 最高perf(天井)の参考列
     pmax_h = f"{'最高':>7}" if has_pmax else ""
+    hit_h = f"{'的中':>4}" if has_fin else ""   # 回顧: 単勝/複勝 的中馬の印
     for rid, g in sub.groupby("race_id"):
         g = _ability_marks(g, sp_col)
         g = g.sort_values(prim, ascending=False, na_position="last")
         if top:
             g = g.head(top)
+        cinfo = (course_map or {}).get(rid, {})
+        rel = _relevant_abilities(cinfo, cinfo.get("distance"),
+                                  cinfo.get("track_condition")) if cinfo else []
+        # 人気=レース内のオッズ昇順順位
+        onum = pd.to_numeric(g.get("odds"), errors="coerce")
+        ninki = onum.rank(method="min")
         print(f"\n=== {rid}  {names.get(rid, '')} ===")
-        cline = _course_line((course_map or {}).get(rid, {}))
+        cline = _course_line(cinfo)
         if cline:
             print(cline)
+        abil_h = "".join(f"{ABILITY_META[k][0]:>6}" for k in rel)
         print(f"{'馬番':>3} {'馬名':<12}{plab:>7}{'印':<5}{pmax_h}"
-              f"{slab + '(参考)':>10}{'オッズ':>7}{fin_h}")
-        for _, r in g.iterrows():
+              f"{slab + '(参考)':>10}{abil_h}{'オッズ':>7}{'人気':>4}{fin_h}{hit_h}")
+        for idx, r in g.iterrows():
             pv = _f(r.get(prim), pfmt)
             pm = ("条" if r.get("mura") else "") \
                 + (r.get("elo_mark") or "") + (r.get("elo_val") or "")
             mx = f"{_f(r.get('pmax'), '6.1f'):>7}" if has_pmax else ""
             sv = _f(r.get(sec), "5.1f") + ((r.get("sp_mark") or "") == "⭐" and "⭐" or "")
+            av = "".join(f"{_f(r.get(k), ABILITY_META[k][1]):>6}" for k in rel)
             odds = _f(r.get("odds"), "6.1f")
-            fin = ""
+            nk = ninki.get(idx)
+            nks = f"{int(nk):>3}人" if pd.notna(nk) else f"{'-':>4}"
+            fin = ""; hit = ""
             if has_fin:
                 fv = pd.to_numeric(pd.Series([r.get("finish")]), errors="coerce").iloc[0]
                 fin = f"{int(fv):>5}" if pd.notna(fv) else f"{'-':>5}"
+                if pd.notna(fv):
+                    hit = f"{'◎単' if fv == 1 else ('○複' if fv <= 3 else ''):>4}"
+                else:
+                    hit = f"{'':>4}"
             print(f"{int(r['horse_number']):>3} {str(r['horse_name'])[:12]:<12}"
-                  f"{pv:>7}{pm:<5}{mx}{sv:>10}{odds:>7}{fin}")
+                  f"{pv:>7}{pm:<5}{mx}{sv:>10}{av}{odds:>7}{nks}{fin}{hit}")
     pdesc = ("反復レーティング＝どれくらい強い相手に勝ったか(格・対戦網)"
              if prim == "r_before" else "相手込みの総合実力(初期1500)")
     sdesc = ("展開・斤量補正＋縮約の総合実力(時計)。参考"
@@ -470,6 +526,13 @@ def _ability_table(sub: pd.DataFrame, names: dict, top: int = 0,
     print(f"※{plab}で ⭐=特出(z≧1.5) / ◎○▲△=非特出の1〜4番手"
           "(5番手以降も4番手と僅差なら△) / ✅=オッズ妙味(期待値≧1.5)。並びは{}順。"
           .format(plab))
+    print("※ﾄｯﾌﾟ/瞬発/持続/ﾊﾟﾜｰ/ｽﾀﾐﾅ=好走時の実力値(quality)、距離/道悪=複勝率、"
+          "先行=平均隊列。※瞬発(上がり3F)と先行(隊列)は小さいほど良、他は大きいほど良。"
+          "そのレースに効く能力・適性だけを表示(参考・スコア非加算)。")
+    if has_fin:
+        print("※的中: ◎単=1着(単勝的中馬) / ○複=2・3着(複勝的中馬)。人気=最終オッズ順。")
+    else:
+        print("※人気=現在のオッズ順。")
     return 0
 
 
@@ -563,10 +626,11 @@ def main(argv=None) -> int:
     if args.ability_only:
         conn = sqlite3.connect(args.db)
         fin = pd.read_sql_query(
-            "SELECT race_id, horse_id, finish_position AS finish FROM results "
+            "SELECT race_id, horse_id, finish_position AS finish, popularity FROM results "
             "WHERE finish_position IS NOT NULL", conn)
-        # 新・能力2指標を結合（無ければ従来のElo/最高SPにフォールバック）
-        for tbl, cols in (("v_ability", "power_top"),
+        # 新・能力2指標＋6能力/適性を結合（無ければ従来のElo/最高SPにフォールバック）
+        for tbl, cols in (("v_ability", "power_top, shunpatsu, jizoku, toppspeed, "
+                           "power, stamina, start, stamina_show, off_show"),
                           ("horse_relative_r", "r_before, pmax")):
             try:
                 extra = pd.read_sql_query(
