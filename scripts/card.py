@@ -325,7 +325,7 @@ def _relevant_abilities(c: dict, distance, going) -> list:
     st = c.get("straight_m") or 0
     hill = c.get("hill_grade")
     turn = c.get("turn_size")
-    if st >= 480:                       # 長い直線(東京・新潟外・阪神外) → キレ
+    if st >= 460:                       # 長い直線(東京・新潟外・阪神外) → キレ
         out += ["toppspeed", "shunpatsu"]
     if hill == "steep":                 # 急坂(中山・阪神内・中京) → パワー
         out += ["power"]
