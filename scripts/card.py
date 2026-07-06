@@ -415,10 +415,17 @@ def _ability_marks(g: pd.DataFrame, sp_col: str = "best_speed_prior") -> pd.Data
     オッズがあれば、各指標の強さに対しオッズが割に合う馬へ ✅。いずれも高いほど良。
     """
     g = g.copy()
-    odds = pd.to_numeric(g.get("odds"), errors="coerce")
+    odds = (pd.to_numeric(g["odds"], errors="coerce") if "odds" in g.columns
+            else pd.Series(np.nan, index=g.index))
     for key, col in (("elo", _prim_col(g)), ("sp", _sec_col(g, sp_col))):
         mark = pd.Series("", index=g.index)
-        v = pd.to_numeric(g.get(col), errors="coerce")
+        if col not in g.columns:            # 解決先の列が無い（全NaNでフォールバック時等）→ 印なし
+            g[key + "_z"] = np.nan
+            g[key + "_mark"] = mark
+            g[key + "_val"] = ""
+            g[key + "_ev"] = np.nan
+            continue
+        v = pd.to_numeric(g[col], errors="coerce")
         valid = v.notna()
         sd = v[valid].std(ddof=0) if valid.sum() >= 2 else 0.0
         if valid.sum() >= 2 and sd and sd > 0:
