@@ -60,7 +60,7 @@ def compute(conn: sqlite3.Connection) -> int:
     conn.execute(
         """CREATE TABLE horse_relative_r (
                race_id TEXT NOT NULL, horse_id TEXT NOT NULL,
-               r_before REAL, perf REAL, pstd REAL,
+               r_before REAL, perf REAL, pstd REAL, pmax REAL,
                PRIMARY KEY (race_id, horse_id))"""
     )
 
@@ -132,25 +132,28 @@ def compute(conn: sqlite3.Connection) -> int:
         if pn and pn[1] > 1 and rid in field_r:
             pos, n = pn
             perf[(rid, hid)] = field_r[rid] + 40.0 * (0.5 - (pos - 1) / (n - 1))
-    # pstd を日付順に as-of で計算（当該レース前の perf 列の標準偏差）
+    # pstd/pmax を日付順に as-of で計算（当該レース前の perf 列の標準偏差・最高値）
     prior_perf: dict[str, list[float]] = {}
     pstd: dict[tuple[str, str], float] = {}
+    pmax: dict[tuple[str, str], float] = {}
     for ym in months:
         for rid in month_races[ym]:
             for hid in race_runners[rid]:
                 lst = prior_perf.get(hid)
-                if lst and len(lst) >= 2:
-                    pstd[(rid, hid)] = round(statistics.stdev(lst), 2)
+                if lst:
+                    pmax[(rid, hid)] = round(max(lst), 2)       # 過去の最高perf(天井)
+                    if len(lst) >= 2:
+                        pstd[(rid, hid)] = round(statistics.stdev(lst), 2)
             for hid in race_runners[rid]:      # 記録後に当該走を prior へ追加
                 if (rid, hid) in perf:
                     prior_perf.setdefault(hid, []).append(perf[(rid, hid)])
 
     conn.executemany(
         """INSERT OR REPLACE INTO horse_relative_r
-           (race_id, horse_id, r_before, perf, pstd) VALUES (?,?,?,?,?)""",
+           (race_id, horse_id, r_before, perf, pstd, pmax) VALUES (?,?,?,?,?,?)""",
         [(r, h, rb,
           round(perf[(r, h)], 2) if (r, h) in perf else None,
-          pstd.get((r, h))) for (r, h, rb) in out],
+          pstd.get((r, h)), pmax.get((r, h))) for (r, h, rb) in out],
     )
     conn.commit()
     return len(out)

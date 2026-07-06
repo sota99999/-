@@ -429,6 +429,8 @@ def _ability_table(sub: pd.DataFrame, names: dict, top: int = 0,
     sec = _sec_col(sub, sp_col)              # 相補(能力 or SP)
     plab, slab = _ind_label(prim), _ind_label(sec)
     pfmt = "6.1f" if prim == "r_before" else "5.0f"
+    has_pmax = _has(sub, "pmax")            # 最高perf(天井)の参考列
+    pmax_h = f"{'最高':>7}" if has_pmax else ""
     for rid, g in sub.groupby("race_id"):
         g = _ability_marks(g, sp_col)
         g = g.sort_values(prim, ascending=False, na_position="last")
@@ -438,12 +440,13 @@ def _ability_table(sub: pd.DataFrame, names: dict, top: int = 0,
         cline = _course_line((course_map or {}).get(rid, {}))
         if cline:
             print(cline)
-        print(f"{'馬番':>3} {'馬名':<12}{plab:>7}{'印':<5}"
+        print(f"{'馬番':>3} {'馬名':<12}{plab:>7}{'印':<5}{pmax_h}"
               f"{slab + '(参考)':>10}{'オッズ':>7}{fin_h}")
         for _, r in g.iterrows():
             pv = _f(r.get(prim), pfmt)
             pm = ("条" if r.get("mura") else "") \
                 + (r.get("elo_mark") or "") + (r.get("elo_val") or "")
+            mx = f"{_f(r.get('pmax'), '6.1f'):>7}" if has_pmax else ""
             sv = _f(r.get(sec), "5.1f") + ((r.get("sp_mark") or "") == "⭐" and "⭐" or "")
             odds = _f(r.get("odds"), "6.1f")
             fin = ""
@@ -451,7 +454,7 @@ def _ability_table(sub: pd.DataFrame, names: dict, top: int = 0,
                 fv = pd.to_numeric(pd.Series([r.get("finish")]), errors="coerce").iloc[0]
                 fin = f"{int(fv):>5}" if pd.notna(fv) else f"{'-':>5}"
             print(f"{int(r['horse_number']):>3} {str(r['horse_name'])[:12]:<12}"
-                  f"{pv:>7}{pm:<5}{sv:>10}{odds:>7}{fin}")
+                  f"{pv:>7}{pm:<5}{mx}{sv:>10}{odds:>7}{fin}")
     pdesc = ("反復レーティング＝どれくらい強い相手に勝ったか(格・対戦網)"
              if prim == "r_before" else "相手込みの総合実力(初期1500)")
     sdesc = ("展開・斤量補正＋縮約の総合実力(時計)。参考"
@@ -459,6 +462,9 @@ def _ability_table(sub: pd.DataFrame, names: dict, top: int = 0,
              else ("スピード指数の自己最高(天井)" if sec == "best_speed_prior"
                    else "好走時(3着内)だけの平均SP"))
     print(f"\n※主指標は{plab}のみ（着差・時計は順位より弱く一本化）。{plab}={pdesc}。")
+    if has_pmax:
+        print("※最高=その馬が過去に出した実力点perfの最高値(天井)。相対Rが低くても最高が高い"
+              "馬は条件が向けば一発ある(参考・スコア非加算)。")
     print("※印「条」=ムラ馬(実力点のばらつき大)を、今回条件に合致した過去走だけで再評価した値。")
     print(f"※{slab}は参考列（{sdesc}）。⭐=時計が特出。相対Rが高く時計も⭐なら妙味。")
     print(f"※{plab}で ⭐=特出(z≧1.5) / ◎○▲△=非特出の1〜4番手"
@@ -560,10 +566,11 @@ def main(argv=None) -> int:
             "SELECT race_id, horse_id, finish_position AS finish FROM results "
             "WHERE finish_position IS NOT NULL", conn)
         # 新・能力2指標を結合（無ければ従来のElo/最高SPにフォールバック）
-        for tbl, col in (("v_ability", "power_top"), ("horse_relative_r", "r_before")):
+        for tbl, cols in (("v_ability", "power_top"),
+                          ("horse_relative_r", "r_before, pmax")):
             try:
                 extra = pd.read_sql_query(
-                    f"SELECT race_id, horse_id, {col} FROM {tbl}", conn)
+                    f"SELECT race_id, horse_id, {cols} FROM {tbl}", conn)
                 sub = sub.merge(extra, on=["race_id", "horse_id"], how="left")
             except Exception:  # noqa: BLE001  テーブル未作成時は従来指標のまま
                 pass
