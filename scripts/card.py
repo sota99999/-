@@ -639,16 +639,33 @@ def main(argv=None) -> int:
         fin = pd.read_sql_query(
             "SELECT race_id, horse_id, finish_position AS finish, popularity FROM results "
             "WHERE finish_position IS NOT NULL", conn)
-        # 新・能力2指標＋6能力/適性を結合（無ければ従来のElo/最高SPにフォールバック）
-        for tbl, cols in (("v_ability", "power_top, shunpatsu, jizoku, toppspeed, "
-                           "power, stamina, start, stamina_show, off_show"),
-                          ("horse_relative_r", "r_before, pmax")):
-            try:
-                extra = pd.read_sql_query(
-                    f"SELECT race_id, horse_id, {cols} FROM {tbl}", conn)
-                sub = sub.merge(extra, on=["race_id", "horse_id"], how="left")
-            except Exception:  # noqa: BLE001  テーブル未作成時は従来指標のまま
-                pass
+        # 相対R(r_before/pmax)は当該レースに直接付与済み(出馬表含む)→直接join
+        try:
+            rr = pd.read_sql_query(
+                "SELECT race_id, horse_id, r_before, pmax FROM horse_relative_r", conn)
+            sub = sub.merge(rr, on=["race_id", "horse_id"], how="left")
+        except Exception:  # noqa: BLE001
+            pass
+        # 6能力/power_top は v_ability に「結果のあるレース」しか行が無い。
+        # 各馬の「対象レース日以前で最新」の行を merge_asof で付与:
+        #   予想(未来レース)→直近の能力プロファイル / 回顧(過去)→as-of行でリーク無し。
+        acols = ["power_top", "shunpatsu", "jizoku", "toppspeed", "power",
+                 "stamina", "start", "stamina_show", "off_show"]
+        try:
+            va = pd.read_sql_query(
+                "SELECT horse_id, race_date AS _vd, " + ", ".join(acols)
+                + " FROM v_ability", conn)
+            rd = pd.read_sql_query("SELECT race_id, race_date AS _td FROM races", conn)
+            sub = sub.merge(rd, on="race_id", how="left")
+            va["_vd"] = pd.to_datetime(va["_vd"], errors="coerce")
+            sub["_td"] = pd.to_datetime(sub["_td"], errors="coerce")
+            va = va.dropna(subset=["_vd"]).sort_values("_vd")
+            sub = sub.sort_values("_td")
+            sub = pd.merge_asof(sub, va, left_on="_td", right_on="_vd",
+                                by="horse_id", direction="backward")
+            sub = sub.drop(columns=["_td", "_vd"], errors="ignore")
+        except Exception:  # noqa: BLE001  v_ability未作成なら従来指標にフォールバック
+            pass
         conn.close()
         sub = sub.merge(fin, on=["race_id", "horse_id"], how="left")
         # ムラ馬だけ条件補正: 相対R(r_before) を条件評価 r_adj に差し替え、印「条」を付ける
