@@ -73,14 +73,17 @@ def main(argv=None) -> int:
         c = q(sql)
         report(label, None if c is None else c < nrace * thresh,
                f"{c}/{nrace}レース ({(c or 0)/nrace*100:.1f}%)")
-    # 相対Rはリーク防止の立ち上げ期(最初の90日)にはスナップショットが作れないため、
-    # 立ち上げ期を除いたレースで測る（88%前後で止まるのは設計通り＝誤検知しない）
+    # 相対Rが付かないのは設計上2種: ①リーク防止の立ち上げ期(最初の90日は
+    # スナップショット不能) ②新馬戦(全馬デビュー=過去データ無し)。両方除いて測る。
     cut = q("SELECT DATE(MIN(race_date), '+90 days') FROM races")
-    n2 = q(f"SELECT COUNT(*) FROM races WHERE {FIN} AND race_date >= '{cut}'") or 1
+    cond = f"{FIN} AND race_date >= '{cut}' AND race_name NOT LIKE '%新馬%'"
+    n2 = q(f"SELECT COUNT(*) FROM races WHERE {cond}") or 1
     c2 = q(f"""SELECT COUNT(DISTINCT hr.race_id) FROM horse_relative_r hr
                JOIN races ra ON ra.race_id = hr.race_id
-               WHERE ra.race_date >= '{cut}' AND hr.{FIN}""")
-    report("相対R（立ち上げ90日を除く）", None if c2 is None else c2 < n2 * 0.95,
+               WHERE ra.{FIN} AND ra.race_date >= '{cut}'
+                 AND ra.race_name NOT LIKE '%新馬%'""")
+    report("相対R（立ち上げ90日・新馬戦を除く）",
+           None if c2 is None else c2 < n2 * 0.95,
            f"{c2}/{n2}レース ({(c2 or 0)/n2*100:.1f}%)")
 
     print("== ④ 異常値 ==")
