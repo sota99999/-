@@ -67,18 +67,26 @@ def main(argv=None) -> int:
          f"SELECT COUNT(DISTINCT race_id) FROM v_speed WHERE speed_index IS NOT NULL AND {FIN}", 0.85),
         ("ラップ race_laps",
          f"SELECT COUNT(*) FROM race_laps WHERE race_first3f IS NOT NULL AND {FIN}", 0.7),
-        ("相対R horse_relative_r",
-         f"SELECT COUNT(DISTINCT race_id) FROM horse_relative_r WHERE {FIN}", 0.9),
         ("コース形態 v_course",
          f"SELECT COUNT(*) FROM v_course WHERE straight_m IS NOT NULL AND {FIN}", 0.9),
     ]:
         c = q(sql)
         report(label, None if c is None else c < nrace * thresh,
                f"{c}/{nrace}レース ({(c or 0)/nrace*100:.1f}%)")
+    # 相対Rはリーク防止の立ち上げ期(最初の90日)にはスナップショットが作れないため、
+    # 立ち上げ期を除いたレースで測る（88%前後で止まるのは設計通り＝誤検知しない）
+    cut = q("SELECT DATE(MIN(race_date), '+90 days') FROM races")
+    n2 = q(f"SELECT COUNT(*) FROM races WHERE {FIN} AND race_date >= '{cut}'") or 1
+    c2 = q(f"""SELECT COUNT(DISTINCT hr.race_id) FROM horse_relative_r hr
+               JOIN races ra ON ra.race_id = hr.race_id
+               WHERE ra.race_date >= '{cut}' AND hr.{FIN}""")
+    report("相対R（立ち上げ90日を除く）", None if c2 is None else c2 < n2 * 0.95,
+           f"{c2}/{n2}レース ({(c2 or 0)/n2*100:.1f}%)")
 
     print("== ④ 異常値 ==")
-    out = q("SELECT COUNT(*) FROM v_run_adj WHERE quality_sp > 150 OR quality_sp < -50")
-    report("quality_sp の外れ値(>150 or <-50)",
+    # v_run_adj の入口ガード(speed_index -50〜150)＋補正(±5程度)を考慮した外側だけを異常視
+    out = q("SELECT COUNT(*) FROM v_run_adj WHERE quality_sp > 160 OR quality_sp < -60")
+    report("quality_sp の外れ値(>160 or <-60)",
            None if out is None else out > 0, f"{out}走")
     bad_fin = q("""SELECT COUNT(*) FROM results r JOIN races ra ON ra.race_id=r.race_id
                    WHERE r.finish_position > ra.field_size""")

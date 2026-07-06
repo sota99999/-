@@ -34,7 +34,8 @@ WITH base AS (
                                  WHEN ra.distance < 1800 THEN 'mile'
                                  WHEN ra.distance < 2200 THEN 'mid' ELSE 'long' END
     LEFT JOIN v_course cm ON cm.race_id = r.race_id
-    WHERE s.speed_index IS NOT NULL
+    -- 異常なスピード指数(変なタイム・小サンプル起因)は能力集約に入れない
+    WHERE s.speed_index IS NOT NULL AND s.speed_index BETWEEN -50 AND 150
 ),
 adj AS (
     SELECT base.*,
