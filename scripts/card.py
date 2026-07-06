@@ -505,8 +505,9 @@ def _ability_table(sub: pd.DataFrame, names: dict, top: int = 0,
             if has_fin:
                 fv = pd.to_numeric(pd.Series([r.get("finish")]), errors="coerce").iloc[0]
                 fin = f"{int(fv):>5}" if pd.notna(fv) else f"{'-':>5}"
-                if pd.notna(fv):
-                    hit = f"{'◎単' if fv == 1 else ('○複' if fv <= 3 else ''):>4}"
+                marked = bool(r.get("elo_mark"))   # ⭐◎○▲△ が付いた馬か
+                if pd.notna(fv) and marked and fv <= 3:
+                    hit = f"{'◎単' if fv == 1 else '○複':>4}"
                 else:
                     hit = f"{'':>4}"
             print(f"{int(r['horse_number']):>3} {str(r['horse_name'])[:12]:<12}"
@@ -530,7 +531,8 @@ def _ability_table(sub: pd.DataFrame, names: dict, top: int = 0,
           "先行=平均隊列。※瞬発(上がり3F)と先行(隊列)は小さいほど良、他は大きいほど良。"
           "そのレースに効く能力・適性だけを表示(参考・スコア非加算)。")
     if has_fin:
-        print("※的中: ◎単=1着(単勝的中馬) / ○複=2・3着(複勝的中馬)。人気=最終オッズ順。")
+        print("※的中: 印(⭐◎○▲△)が付いた馬が馬券圏に来た時だけ表示。◎単=その印が1着 / "
+              "○複=2・3着。無印馬が来ても付かない。人気=最終オッズ順。")
     else:
         print("※人気=現在のオッズ順。")
     return 0
