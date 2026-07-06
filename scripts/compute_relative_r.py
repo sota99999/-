@@ -54,10 +54,14 @@ def compute_snapshot(race_arrays, warm, iters=ITERS, spread=SPREAD):
 
 
 def compute(conn: sqlite3.Connection) -> int:
+    # r_before=相対R / perf=その1走の実力点(相手平均R+着順スコア) /
+    # pstd=当該レース前までのperfのばらつき(=ムラ度。条件評価の対象判定に使う)
+    conn.execute("DROP TABLE IF EXISTS horse_relative_r")
     conn.execute(
-        """CREATE TABLE IF NOT EXISTS horse_relative_r (
+        """CREATE TABLE horse_relative_r (
                race_id TEXT NOT NULL, horse_id TEXT NOT NULL,
-               r_before REAL, PRIMARY KEY (race_id, horse_id))"""
+               r_before REAL, perf REAL, pstd REAL,
+               PRIMARY KEY (race_id, horse_id))"""
     )
 
     rows = conn.execute(
@@ -110,10 +114,43 @@ def compute(conn: sqlite3.Connection) -> int:
         if prior_count >= MIN_PRIOR:
             snapshot = compute_snapshot(prior_arrays, snapshot)
 
-    conn.execute("DELETE FROM horse_relative_r")
+    # --- perf（1走の実力点）と pstd（ムラ度）を計算 -------------------------
+    #   perf = そのレースの相手平均R + 40×着順スコア(勝=+0.5,最下位=-0.5)
+    #   pstd = その馬の「当該レースより前」のperfの標準偏差（リーク防止）
+    import statistics
+    rb_map = {(r, h): rb for (r, h, rb) in out}
+    posn = {(rid, h): (p, n) for rid, arr in race_ranked.items() for (h, p, n) in arr}
+    # 各レースの相手平均R（r_before を持つ出走馬の平均）
+    field_r: dict[str, float] = {}
+    for rid in {r for (r, _h, _rb) in out}:
+        vals = [rb_map[(rid, h)] for h in race_runners[rid] if (rid, h) in rb_map]
+        if vals:
+            field_r[rid] = sum(vals) / len(vals)
+    perf: dict[tuple[str, str], float] = {}
+    for (rid, hid) in rb_map:
+        pn = posn.get((rid, hid))
+        if pn and pn[1] > 1 and rid in field_r:
+            pos, n = pn
+            perf[(rid, hid)] = field_r[rid] + 40.0 * (0.5 - (pos - 1) / (n - 1))
+    # pstd を日付順に as-of で計算（当該レース前の perf 列の標準偏差）
+    prior_perf: dict[str, list[float]] = {}
+    pstd: dict[tuple[str, str], float] = {}
+    for ym in months:
+        for rid in month_races[ym]:
+            for hid in race_runners[rid]:
+                lst = prior_perf.get(hid)
+                if lst and len(lst) >= 2:
+                    pstd[(rid, hid)] = round(statistics.stdev(lst), 2)
+            for hid in race_runners[rid]:      # 記録後に当該走を prior へ追加
+                if (rid, hid) in perf:
+                    prior_perf.setdefault(hid, []).append(perf[(rid, hid)])
+
     conn.executemany(
-        "INSERT OR REPLACE INTO horse_relative_r (race_id, horse_id, r_before) VALUES (?,?,?)",
-        out,
+        """INSERT OR REPLACE INTO horse_relative_r
+           (race_id, horse_id, r_before, perf, pstd) VALUES (?,?,?,?,?)""",
+        [(r, h, rb,
+          round(perf[(r, h)], 2) if (r, h) in perf else None,
+          pstd.get((r, h))) for (r, h, rb) in out],
     )
     conn.commit()
     return len(out)

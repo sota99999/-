@@ -442,7 +442,8 @@ def _ability_table(sub: pd.DataFrame, names: dict, top: int = 0,
               f"{slab + '(参考)':>10}{'オッズ':>7}{fin_h}")
         for _, r in g.iterrows():
             pv = _f(r.get(prim), pfmt)
-            pm = (r.get("elo_mark") or "") + (r.get("elo_val") or "")
+            pm = ("条" if r.get("mura") else "") \
+                + (r.get("elo_mark") or "") + (r.get("elo_val") or "")
             sv = _f(r.get(sec), "5.1f") + ((r.get("sp_mark") or "") == "⭐" and "⭐" or "")
             odds = _f(r.get("odds"), "6.1f")
             fin = ""
@@ -458,6 +459,7 @@ def _ability_table(sub: pd.DataFrame, names: dict, top: int = 0,
              else ("スピード指数の自己最高(天井)" if sec == "best_speed_prior"
                    else "好走時(3着内)だけの平均SP"))
     print(f"\n※主指標は{plab}のみ（着差・時計は順位より弱く一本化）。{plab}={pdesc}。")
+    print("※印「条」=ムラ馬(実力点のばらつき大)を、今回条件に合致した過去走だけで再評価した値。")
     print(f"※{slab}は参考列（{sdesc}）。⭐=時計が特出。相対Rが高く時計も⭐なら妙味。")
     print(f"※{plab}で ⭐=特出(z≧1.5) / ◎○▲△=非特出の1〜4番手"
           "(5番手以降も4番手と僅差なら△) / ✅=オッズ妙味(期待値≧1.5)。並びは{}順。"
@@ -567,6 +569,18 @@ def main(argv=None) -> int:
                 pass
         conn.close()
         sub = sub.merge(fin, on=["race_id", "horse_id"], how="left")
+        # ムラ馬だけ条件補正: 相対R(r_before) を条件評価 r_adj に差し替え、印「条」を付ける
+        try:
+            import cond_rating
+            adj = cond_rating.adjusted(args.db, sub["race_id"].unique().tolist())
+            if not adj.empty:
+                sub = sub.merge(adj[["race_id", "horse_id", "r_adj", "is_mura"]],
+                                on=["race_id", "horse_id"], how="left")
+                use = sub["r_adj"].notna()
+                sub.loc[use, "r_before"] = sub.loc[use, "r_adj"]
+                sub["mura"] = sub.get("is_mura").fillna(False) & use
+        except Exception:  # noqa: BLE001  モジュール未配置・perf/pstd未計算なら通常のr_before
+            pass
         course_map = _load_course_map(args.db, sub["race_id"].unique().tolist())
         return _ability_table(sub, names, args.top, course_map,
                               SP_COLS.get(args.sp_col, "best_speed_prior"))
