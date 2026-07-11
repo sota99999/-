@@ -810,10 +810,11 @@ def ingest_shutuba(conn: sqlite3.Connection, race_id: str, race_date: str | None
     parsed = parse_shutuba(html, race_id)
     if race_date:   # クローラ指定日を開催日の正とする（出走前ページは日付が不確実なため）
         parsed["race"]["race_date"] = race_date
-    upsert_race(conn, parsed)
-    # --- 再取得時の掃除 ---------------------------------------------------
+    # --- 再取得時の掃除（upsert より先に行う）------------------------------
     #   登録段階(仮馬番・重複登録)で取り込んだ行は、枠順確定後の再取得で
-    #   出走馬から消えても upsert では残る。今回の出走馬に無い未確定行を削除する。
+    #   出走馬から消えても upsert では残る。今回の出走馬に無い未確定行を先に
+    #   削除する。後から消す方式だと、同じ馬の旧行(別馬番)が UNIQUE
+    #   (race_id, horse_id) 制約に当たって INSERT 自体が失敗する。
     #   （パース0頭の時は消さない＝取得失敗でデータを壊さないため）
     if parsed["results"]:
         keep = {(r["horse_id"], r["horse_number"]) for r in parsed["results"]}
@@ -827,6 +828,8 @@ def ingest_shutuba(conn: sqlite3.Connection, race_id: str, race_date: str | None
                 "AND horse_number=? AND finish_position IS NULL", (race_id, h, n))
         if stale:
             print(f"    [掃除] {race_id}: 登録落ち・馬番変更の旧行 {len(stale)}件を削除")
+    upsert_race(conn, parsed)
+    if parsed["results"]:
         conn.execute("UPDATE races SET field_size=? WHERE race_id=?",
                      (len(parsed["results"]), race_id))
     if parsed.get("provisional"):
