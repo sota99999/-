@@ -126,11 +126,21 @@ def main(argv=None) -> int:
         try:
             all_ids = fetch_race_ids_for_date(day)
         except Exception as e:  # noqa: BLE001
-            print(f"[NG] {prefix} 一覧取得失敗: {e}", file=sys.stderr)
-            time.sleep(scraper.REQUEST_INTERVAL)
-            continue
+            if not args.shutuba:
+                print(f"[NG] {prefix} 一覧取得失敗: {e}", file=sys.stderr)
+                time.sleep(scraper.REQUEST_INTERVAL)
+                continue
+            # 出馬表モードは一覧が取れなくても、DB登録済みレースで続行できる
+            print(f"[--] {prefix} 一覧取得失敗。DB登録済みレースで続行: {e}")
+            all_ids = []
 
-        # 出馬表モードはオッズ更新のため取得済みも対象（差分スキップしない）
+        # 出馬表モードはオッズ更新のため取得済みも対象（差分スキップしない）。
+        # さらに一覧ページに無くても、DBにその日として登録済みのレースは必ず
+        # 再取得する（登録リスト段階で取り込んだレースの掃除が漏れないように）。
+        if args.shutuba:
+            in_db = [r[0] for r in conn.execute(
+                "SELECT race_id FROM races WHERE race_date = ?", (day.isoformat(),))]
+            all_ids = list(dict.fromkeys(all_ids + in_db))
         target_ids = all_ids if args.shutuba else filter_new(conn, all_ids)
         kind = "出馬表" if args.shutuba else "結果"
         label = "全" if args.shutuba else "対象"
