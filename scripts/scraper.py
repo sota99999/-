@@ -416,6 +416,11 @@ def upsert_race(conn: sqlite3.Connection, parsed: dict) -> None:
                        :finish_position, :finish_status, :time_seconds, :margin, :passing, :last_3f,
                        :weight_carried, :horse_weight, :weight_change, :odds, :popularity)
                ON CONFLICT(race_id, horse_number) DO UPDATE SET
+                   horse_id=excluded.horse_id,
+                   jockey_id=COALESCE(excluded.jockey_id, results.jockey_id),
+                   trainer_id=COALESCE(excluded.trainer_id, results.trainer_id),
+                   post_position=COALESCE(excluded.post_position, results.post_position),
+                   weight_carried=COALESCE(excluded.weight_carried, results.weight_carried),
                    finish_position=excluded.finish_position, finish_status=excluded.finish_status,
                    time_seconds=excluded.time_seconds, margin=excluded.margin,
                    passing=excluded.passing, last_3f=excluded.last_3f,
@@ -535,6 +540,7 @@ def parse_shutuba(html: str, race_id: str) -> dict:
             return cells[i] if i is not None and i < len(cells) else None
 
         seq = 0
+        saw_umaban = False   # 馬番セルが1つも無い＝枠順確定前（特別登録リスト）
         for tr in rows_tr[1:]:
             cells = tr.find_all("td")
             if not cells:
@@ -553,6 +559,8 @@ def parse_shutuba(html: str, race_id: str) -> dict:
             uta = tr.select_one('td[class*="Umaban"]')
             wta = tr.select_one('td[class*="Waku"]')
             hn = _to_int(uta.get_text(strip=True)) if uta else None
+            if hn:
+                saw_umaban = True
             row["post_position"] = (_to_int(wta.get_text(strip=True)) if wta else None) \
                 or _to_int((cell(cells, "枠") or _blank()).get_text(strip=True))
             # 枠順確定前は馬番が無いので連番を仮置き（確定後の再取得で本来の馬番に更新される）
@@ -585,7 +593,11 @@ def parse_shutuba(html: str, race_id: str) -> dict:
             results.append(row)
 
     race["field_size"] = len(results) or None
-    return {"race": race, "results": results, "payouts": []}
+    # 枠順確定前（馬番セル無し）や JRAフルゲート(18頭)超は「特別登録リスト」段階。
+    # 登録リストは他レースとの重複登録・登録落ち馬を含むため、呼び出し側で警告する。
+    provisional = bool(results) and (not saw_umaban or len(results) > 18)
+    return {"race": race, "results": results, "payouts": [],
+            "provisional": provisional}
 
 
 # -----------------------------------------------------------------------------
@@ -799,6 +811,27 @@ def ingest_shutuba(conn: sqlite3.Connection, race_id: str, race_date: str | None
     if race_date:   # クローラ指定日を開催日の正とする（出走前ページは日付が不確実なため）
         parsed["race"]["race_date"] = race_date
     upsert_race(conn, parsed)
+    # --- 再取得時の掃除 ---------------------------------------------------
+    #   登録段階(仮馬番・重複登録)で取り込んだ行は、枠順確定後の再取得で
+    #   出走馬から消えても upsert では残る。今回の出走馬に無い未確定行を削除する。
+    #   （パース0頭の時は消さない＝取得失敗でデータを壊さないため）
+    if parsed["results"]:
+        keep = {(r["horse_id"], r["horse_number"]) for r in parsed["results"]}
+        old = conn.execute(
+            "SELECT horse_id, horse_number FROM results "
+            "WHERE race_id=? AND finish_position IS NULL", (race_id,)).fetchall()
+        stale = [(h, n) for (h, n) in old if (h, n) not in keep]
+        for h, n in stale:
+            conn.execute(
+                "DELETE FROM results WHERE race_id=? AND horse_id=? "
+                "AND horse_number=? AND finish_position IS NULL", (race_id, h, n))
+        if stale:
+            print(f"    [掃除] {race_id}: 登録落ち・馬番変更の旧行 {len(stale)}件を削除")
+        conn.execute("UPDATE races SET field_size=? WHERE race_id=?",
+                     (len(parsed["results"]), race_id))
+    if parsed.get("provisional"):
+        print(f"    [注意] {race_id}: 枠順確定前の登録馬リスト"
+              f"({len(parsed['results'])}頭)。確定後に再取得してください")
     return parsed
 
 

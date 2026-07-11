@@ -107,6 +107,47 @@ def main(argv=None) -> int:
     report("出馬表レースへの相対R付与",
            None if upr is None else (up > 0 and upr == 0),
            f"{upr}/{up}レース（0なら compute_relative_r.py を実行）")
+    # 相対Rが「一部のレースだけ」欠ける取りこぼし（パイプライン途中失敗の典型）
+    miss = q("""SELECT COUNT(*) FROM races ra WHERE ra.race_id IN
+                (SELECT race_id FROM results GROUP BY race_id
+                 HAVING COUNT(finish_position)=0)
+                AND ra.race_name NOT LIKE '%新馬%'
+                AND ra.race_id NOT IN (SELECT DISTINCT race_id FROM horse_relative_r)""")
+    report("相対R未付与の未確定レース（新馬除く）",
+           None if miss is None else miss > 0,
+           f"{miss}レース（>0なら compute_relative_r.py を再実行）")
+
+    print("== ⑥ 出馬表の健全性（登録リスト混入・重複登録）==")
+    # JRAフルゲートは18頭。超えていたら特別登録リストを出馬表として取り込んでいる
+    over = q("""SELECT COUNT(*) FROM (SELECT race_id FROM results
+                GROUP BY race_id
+                HAVING COUNT(finish_position)=0 AND COUNT(*) > 18)""")
+    report("頭数>18の未確定レース（登録リスト混入）",
+           None if over is None else over > 0,
+           f"{over}レース（枠順確定後に crawler --shutuba で再取得）")
+    # 同一馬が同一開催日に複数レース＝重複登録の残骸（実際は1レースしか走れない）
+    dup = q("""SELECT COUNT(*) FROM (
+                SELECT r.horse_id, ra.race_date FROM results r
+                JOIN races ra ON ra.race_id = r.race_id
+                GROUP BY r.horse_id, ra.race_date
+                HAVING COUNT(DISTINCT r.race_id) > 1)""")
+    report("同一馬が同日複数レースに出走", None if dup is None else dup > 0,
+           f"{dup}組（出馬表の再取得で解消）")
+    # 未確定レースの出走馬が、前日〜当日に既に走っている（土曜勝ち馬が日曜にも等）
+    ghost = q("""SELECT COUNT(DISTINCT r.horse_id) FROM results r
+                 JOIN races ra ON ra.race_id = r.race_id
+                 WHERE r.finish_position IS NULL
+                   AND ra.race_id IN (SELECT race_id FROM results GROUP BY race_id
+                                      HAVING COUNT(finish_position)=0)
+                   AND EXISTS (SELECT 1 FROM results r2
+                               JOIN races ra2 ON ra2.race_id = r2.race_id
+                               WHERE r2.horse_id = r.horse_id
+                                 AND r2.finish_position IS NOT NULL
+                                 AND ra2.race_date BETWEEN DATE(ra.race_date,'-1 day')
+                                                       AND ra.race_date)""")
+    report("未確定レースに直近1日以内の出走済み馬",
+           None if ghost is None else ghost > 0,
+           f"{ghost}頭（重複登録の残骸。出馬表の再取得で解消）")
 
     print(f"\n診断完了: 問題 {issues} 件。" + ("要確認。" if issues else "健全です。"))
     con.close()

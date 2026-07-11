@@ -123,6 +123,9 @@ def main(argv=None) -> int:
             steps.append((f"⑧ MLモデル予想(参考)", pred_args, predict.main))
 
     print(f"=== weekly: DB={args.db} / 予想日={args.raceday or '(なし)'} / 再学習={args.retrain} ===")
+    # 1ステップの失敗で全体を止めない: 収集が部分失敗しても相対R再計算や
+    # スキーマ適用は必ず走らせる（途中で止めると「新レースだけ相対R無し」等の欠損を生む）。
+    failed: list[str] = []
     for i, (label, sargs, func) in enumerate(steps, 1):
         print(f"\n----- {label} -----")
         if args.dry_run:
@@ -132,11 +135,14 @@ def main(argv=None) -> int:
             func(sargs) if sargs is not None else func()
         except SystemExit as e:   # 子スクリプトの sys.exit を致命扱いにしない
             if e.code:
-                print(f"[NG] ステップ失敗: {label} ({e})", file=sys.stderr)
-                return 1
+                print(f"[NG] ステップ失敗（続行）: {label} ({e})", file=sys.stderr)
+                failed.append(label)
         except Exception as e:    # noqa: BLE001
-            print(f"[NG] ステップ失敗: {label}: {e}", file=sys.stderr)
-            return 1
+            print(f"[NG] ステップ失敗（続行）: {label}: {e}", file=sys.stderr)
+            failed.append(label)
+    if failed:
+        print(f"\n[警告] 失敗したステップ: {' / '.join(failed)} "
+              f"— 収集系なら時間をおいて weekly を再実行してください", file=sys.stderr)
 
     print("\n=== 完了 ===")
     if args.raceday and not args.dry_run:
@@ -144,7 +150,7 @@ def main(argv=None) -> int:
         print(f"  python scripts/predict.py --db {args.db} --model {args.show_model}")
         print(f"  python scripts/bet_optimizer.py --db {args.db} --model {args.win_model} "
               f"--predict --bet trio --topn 5")
-    return 0
+    return 1 if failed else 0
 
 
 if __name__ == "__main__":
