@@ -464,9 +464,82 @@ def _ability_marks(g: pd.DataFrame, sp_col: str = "best_speed_prior") -> pd.Data
     return g
 
 
+def _load_payouts(db: str, race_ids: list) -> dict:
+    """{race_id: {'単勝': {馬番: 払戻円}, '複勝': {馬番: 払戻円}}} を返す（回収率用）。"""
+    if not race_ids:
+        return {}
+    con = sqlite3.connect(db)
+    out: dict = {}
+    try:
+        rows = con.execute(
+            "SELECT race_id, bet_type, combination, payout FROM payouts "
+            "WHERE bet_type IN ('単勝','複勝')").fetchall()
+    except sqlite3.OperationalError:
+        rows = []
+    con.close()
+    ids = set(race_ids)
+    for rid, bt, combo, pay in rows:
+        if rid not in ids or pay is None:
+            continue
+        try:
+            num = int(str(combo).strip())
+        except ValueError:
+            continue
+        out.setdefault(rid, {}).setdefault(bt, {})[num] = pay
+    return out
+
+
+def _print_review_summary(records: list, payouts: dict) -> None:
+    """回顧の全レースを通した印別まとめ（単勝/複勝の的中率・回収率）を表示する。
+
+    回収率は「オッズ」ではなく確定払戻(payoutsテーブル)から算出する（実額ベース）。
+    1頭の印につき100円ずつ賭けた前提。本命=各レースの相対R最上位の印。
+    """
+    if not records:
+        return
+    payouts = payouts or {}
+
+    def win_ret(rec):   # 単勝払戻: 1着なら払戻円、無ければオッズ×100で代替
+        if rec["finish"] != 1:
+            return 0
+        p = payouts.get(rec["race_id"], {}).get("単勝", {})
+        return p.get(rec["num"], int((rec["odds"] or 0) * 100))
+
+    def place_ret(rec):  # 複勝払戻: 対象(2〜3着)なら払戻円、外は0
+        return payouts.get(rec["race_id"], {}).get("複勝", {}).get(rec["num"], 0)
+
+    def placed(rec):     # 複勝的中か（払戻対象に馬番があるか）
+        return rec["num"] in payouts.get(rec["race_id"], {}).get("複勝", {})
+
+    buckets = [("本命", lambda r: r["hon"]),
+               ("⭐", lambda r: r["mark"] == "⭐"),
+               ("◎", lambda r: r["mark"] == "◎"),
+               ("○", lambda r: r["mark"] == "○"),
+               ("▲", lambda r: r["mark"] == "▲"),
+               ("△", lambda r: r["mark"] == "△"),
+               ("全印", lambda r: True)]
+    nrace = len({r["race_id"] for r in records})
+    print(f"\n===== 回顧まとめ（{nrace}レース・印別 的中率／回収率）=====")
+    print(f"{'印':<5}{'点数':>5}{'単勝的中':>10}{'複勝的中':>10}{'単回収':>8}{'複回収':>8}")
+    for label, f in buckets:
+        rs = [r for r in records if f(r)]
+        n = len(rs)
+        if not n:
+            continue
+        win = sum(1 for r in rs if r["finish"] == 1)
+        plc = sum(1 for r in rs if placed(r))
+        roi_w = sum(win_ret(r) for r in rs) / (n * 100) * 100
+        roi_p = sum(place_ret(r) for r in rs) / (n * 100) * 100
+        print(f"{label:<5}{n:>5}{f'{win}/{n} {win/n*100:.0f}%':>11}"
+              f"{f'{plc}/{n} {plc/n*100:.0f}%':>11}{roi_w:>7.0f}%{roi_p:>7.0f}%")
+    print("※点数=印が付いた延べ頭数(1頭100円換算)。回収率=払戻総額÷投資額(確定払戻ベース)。")
+    print("※本命=各レースの相対R最上位の印(⭐が居れば⭐/居なければ◎)。新馬など印なしのレースは除外。")
+
+
 def _ability_table(sub: pd.DataFrame, names: dict, top: int = 0,
                    course_map: dict | None = None,
-                   sp_col: str = "best_speed_prior") -> int:
+                   sp_col: str = "best_speed_prior",
+                   payouts: dict | None = None) -> int:
     """Elo・SP の2指標＋印（⭐◎○▲△・✅）＋オッズ（＋着順）を全頭表示する。
 
     SP指標は sp_col で切替（最高SP=天井 / 好走平均SP）。印は _ability_marks の
@@ -482,9 +555,11 @@ def _ability_table(sub: pd.DataFrame, names: dict, top: int = 0,
     has_pmax = _has(sub, "pmax")            # 最高perf(天井)の参考列
     pmax_h = f"{'最高':>7}" if has_pmax else ""
     hit_h = f"{'的中':>4}" if has_fin else ""   # 回顧: 単勝/複勝 的中馬の印
+    records: list = []                            # 回顧まとめ用（印×着順×払戻）
     for rid, g in sub.groupby("race_id"):
         g = _ability_marks(g, sp_col)
         g = g.sort_values(prim, ascending=False, na_position="last")
+        honmei_taken = False                      # 各レースの相対R最上位の印=本命
         if top:
             g = g.head(top)
         cinfo = (course_map or {}).get(rid, {})
@@ -519,6 +594,17 @@ def _ability_table(sub: pd.DataFrame, names: dict, top: int = 0,
                     hit = f"{'◎単' if fv == 1 else '○複':>4}"
                 else:
                     hit = f"{'':>4}"
+                if marked:
+                    od = pd.to_numeric(pd.Series([r.get("odds")]),
+                                       errors="coerce").iloc[0]
+                    records.append({
+                        "race_id": rid, "num": int(r["horse_number"]),
+                        "mark": r.get("elo_mark"),
+                        "finish": int(fv) if pd.notna(fv) else None,
+                        "odds": float(od) if pd.notna(od) else None,
+                        "hon": not honmei_taken,
+                    })
+                    honmei_taken = True
             print(f"{int(r['horse_number']):>3} {str(r['horse_name'])[:12]:<12}"
                   f"{pv:>7}{pm:<5}{mx}{sv:>10}{av}{odds:>7}{nks}{fin}{hit}")
     pdesc = ("反復レーティング＝どれくらい強い相手に勝ったか(格・対戦網)"
@@ -542,6 +628,7 @@ def _ability_table(sub: pd.DataFrame, names: dict, top: int = 0,
     if has_fin:
         print("※的中: 印(⭐◎○▲△)が付いた馬が馬券圏に来た時だけ表示。◎単=その印が1着 / "
               "○複=2・3着。無印馬が来ても付かない。人気=最終オッズ順。")
+        _print_review_summary(records, payouts)
     else:
         print("※人気=現在のオッズ順。")
     return 0
@@ -681,8 +768,9 @@ def main(argv=None) -> int:
         except Exception:  # noqa: BLE001  モジュール未配置・perf/pstd未計算なら通常のr_before
             pass
         course_map = _load_course_map(args.db, sub["race_id"].unique().tolist())
+        payouts = _load_payouts(args.db, sub["race_id"].unique().tolist())
         return _ability_table(sub, names, args.top, course_map,
-                              SP_COLS.get(args.sp_col, "best_speed_prior"))
+                              SP_COLS.get(args.sp_col, "best_speed_prior"), payouts)
 
     # モデル予測（card と evaluate で共通の採点）
     sub = compute_scores(sub, bundle, show_bundle, weights, same_boost=args.same_boost)
