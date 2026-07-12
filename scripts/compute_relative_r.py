@@ -159,10 +159,10 @@ def compute(conn: sqlite3.Connection) -> int:
     return len(out)
 
 
-def main() -> None:
+def main(argv=None) -> None:
     ap = argparse.ArgumentParser(description="反復 strength-of-schedule 相対レーティングを計算")
     ap.add_argument("--db", default="keiba.db")
-    args = ap.parse_args()
+    args = ap.parse_args(argv)
     conn = sqlite3.connect(args.db)
     try:
         n = compute(conn)
